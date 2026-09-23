@@ -162,12 +162,23 @@ function renderHome() {
   </h1>
 
   <div class="card">
+    <div class="section-title"><h2>Discover the provider</h2></div>
+    <div class="field full">
+      <label>Issuer <span class="hint">The realm's base URL, e.g. http://70.12.115.171:24080/realms/dev</span></label>
+      <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
+    </div>
+    <button class="btn" id="discoverBtn" type="button">Fetch provider configuration →</button>
+    <div id="discoverResult" style="display:none; margin-top:14px;"></div>
+    <p class="note" style="margin-top:14px;">
+      Optional, but a good first check: fetches <code>{issuer}/.well-known/openid-configuration</code> through this
+      server (never directly from your browser, so it's not subject to CORS either way) and shows the IdP's
+      advertised endpoints and capabilities.
+    </p>
+  </div>
+
+  <div class="card">
     <div class="section-title"><h2>1. Client configuration</h2></div>
     <div class="grid">
-      <div class="field full">
-        <label>Issuer <span class="hint">The realm's base URL, e.g. http://70.12.115.171:24080/realms/dev</span></label>
-        <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
-      </div>
       <div class="field">
         <label>Client ID</label>
         <input type="text" id="clientId" placeholder="knowledge-agent">
@@ -229,12 +240,12 @@ function renderHome() {
     </p>
   </div>
 
-  <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Build authorization request →</button>
+  <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
 
   <div class="card" id="step1Card" style="display:none; margin-top:18px;">
     <div class="section-title"><h2>Step 1 · Authorization Request</h2></div>
     <div id="step1Body"></div>
-    <button class="btn block" id="goBtn" style="margin-top:14px;">Continue to IdP login →</button>
+    <button class="btn block" id="goBtn" style="margin-top:14px;">Send request → (continue to IdP login)</button>
   </div>
 
   <div class="card" id="historyCard">
@@ -298,6 +309,17 @@ function renderReport(run) {
     html += `<div class="card"><p class="note">The IdP returned an error (or no code) during authorization, so the token exchange was skipped.</p></div>`;
     html += `</div>`;
     return page('Test report', html);
+  }
+
+  if (run.status === 'awaiting_exchange') {
+    html += `<div class="card">
+      <div class="section-title"><h2>Ready for Step 3</h2></div>
+      <p class="note">A single-use authorization code has been received. Nothing else happens automatically — click below to
+        exchange it for tokens over the server ↔ IdP back-channel, and see exactly what's sent.</p>
+      <form method="POST" action="/report/${escapeHtml(run.id)}/exchange">
+        <button class="btn block" type="submit" style="margin-top:12px;">Exchange code for tokens →</button>
+      </form>
+    </div>`;
   }
 
   if (run.step3) {
@@ -384,6 +406,7 @@ app.post('/start', (req, res) => {
   const authUrl = `${normIssuer(issuer)}/protocol/openid-connect/auth?` + new URLSearchParams(params).toString();
 
   runs.set(state, {
+    id: state,
     createdAt: Date.now(),
     config: {
       issuer, clientId, clientSecret: clientSecret || '', redirectUri,
@@ -401,22 +424,12 @@ app.post('/start', (req, res) => {
   res.json({ state, authUrl, params });
 });
 
-app.get('/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  const run = state && runs.get(String(state));
-
-  if (!run) {
-    return res.status(400).send(renderError(
-      'Session not found',
-      'The state value does not match any recorded session. It may have expired (30 min) or the server may have restarted. Please start over.'
-    ));
-  }
-
-  run.step2 = { receivedAt: Date.now(), query: { ...req.query } };
-
-  if (error) { run.status = 'auth_error'; return res.redirect(`/report/${state}`); }
-  if (!code) { run.status = 'no_code'; return res.redirect(`/report/${state}`); }
-
+// Performs Step 3 (token request) + Step 4 (token response) + Step 5/6
+// (decode & verify), mutating `run` in place. Split out from the callback
+// handler so it can be triggered explicitly by the "Exchange code for
+// tokens" button instead of running automatically.
+async function performTokenExchange(run) {
+  const code = run.step2.query.code;
   const tokenUrl = `${normIssuer(run.config.issuer)}/protocol/openid-connect/token`;
   const bodyParams = {
     grant_type: 'authorization_code',
@@ -449,7 +462,7 @@ app.get('/callback', async (req, res) => {
   } catch (e) {
     run.status = 'fetch_error';
     run.step4 = { error: e.message };
-    return res.redirect(`/report/${state}`);
+    return;
   }
 
   run.step4 = {
@@ -460,7 +473,7 @@ app.get('/callback', async (req, res) => {
 
   if (!tokenRes.ok || !tokenJson) {
     run.status = 'token_error';
-    return res.redirect(`/report/${state}`);
+    return;
   }
 
   const step5 = {};
@@ -472,8 +485,58 @@ app.get('/callback', async (req, res) => {
   }
   run.step5 = step5;
   run.status = 'success';
+}
+
+// Step 0 (optional, not tied to a run): fetch the IdP's discovery document
+// so its advertised endpoints/capabilities can be inspected before doing
+// anything else. Proxied through this server so it's never subject to the
+// browser's CORS rules, regardless of what the target issuer allows.
+app.post('/discover', async (req, res) => {
+  const { issuer } = req.body || {};
+  if (!issuer) return res.status(400).json({ error: 'issuer is required.' });
+
+  const url = `${normIssuer(issuer)}/.well-known/openid-configuration`;
+  try {
+    const r = await fetch(url);
+    const text = await r.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { json = null; }
+    res.json({ url, status: r.status, statusText: r.statusText, body: json ?? text });
+  } catch (e) {
+    res.status(502).json({ url, error: e.message });
+  }
+});
+
+app.get('/callback', (req, res) => {
+  const { code, state, error } = req.query;
+  const run = state && runs.get(String(state));
+
+  if (!run) {
+    return res.status(400).send(renderError(
+      'Session not found',
+      'The state value does not match any recorded session. It may have expired (30 min) or the server may have restarted. Please start over.'
+    ));
+  }
+
+  // Only Step 2 (the authorization response) is recorded here. Step 3
+  // (the token exchange) is a separate, explicit action on the report page.
+  run.step2 = { receivedAt: Date.now(), query: { ...req.query } };
+  run.status = error ? 'auth_error' : !code ? 'no_code' : 'awaiting_exchange';
 
   res.redirect(`/report/${state}`);
+});
+
+// Step 3, triggered explicitly from the report page. Uses POST + a redirect
+// back (PRG pattern) so refreshing the report page never re-runs the exchange.
+app.post('/report/:state/exchange', async (req, res) => {
+  const run = runs.get(req.params.state);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  if (run.step2 && !run.step2.query.error && run.step2.query.code) {
+    await performTokenExchange(run);
+  }
+  res.redirect(`/report/${req.params.state}`);
 });
 
 app.get('/report/:state', (req, res) => {

@@ -51,6 +51,39 @@ function renderKv(obj) {
   return `<table class="kv">${rows}</table>`;
 }
 
+// ── Step 0: discover the provider ─────────────────────────────────────────
+$('discoverBtn').addEventListener('click', async () => {
+  const issuer = $('issuer').value.trim();
+  if (!issuer) {
+    alert('Issuer is required.');
+    return;
+  }
+
+  const box = $('discoverResult');
+  box.style.display = 'block';
+  box.innerHTML = '<div class="note">Fetching…</div>';
+
+  const res = await fetch('/discover', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issuer }),
+  });
+  const data = await res.json();
+
+  if (data.error) {
+    box.innerHTML = `<div class="note">Request to <code>${escapeHtml(data.url)}</code> failed: ${escapeHtml(data.error)}</div>`;
+    return;
+  }
+
+  const ok = data.status >= 200 && data.status < 300;
+  box.innerHTML = `
+    <div class="sub">GET <code>${escapeHtml(data.url)}</code> — HTTP ${data.status} ${escapeHtml(data.statusText || '')}
+      <span class="badge ${ok ? 'ok' : 'bad'}" style="margin-left:6px;">${ok ? 'Reachable' : 'Failed'}</span>
+    </div>
+    <pre>${escapeHtml(JSON.stringify(data.body, null, 2))}</pre>
+  `;
+});
+
 let lastAuthUrl = null;
 
 $('startBtn').addEventListener('click', async () => {
@@ -113,7 +146,8 @@ async function loadHistory() {
     $('historyBody').innerHTML = 'None yet';
     return;
   }
-  const badgeClass = (status) => (status === 'success' ? 'ok' : status === 'pending' ? 'muted' : 'bad');
+  const badgeClass = (status) =>
+    status === 'success' ? 'ok' : status === 'pending' || status === 'awaiting_exchange' ? 'muted' : 'bad';
   $('historyBody').innerHTML = '<table class="kv">' + list.map((r) => `
     <tr>
       <td>${new Date(r.createdAt).toLocaleTimeString()}</td>
