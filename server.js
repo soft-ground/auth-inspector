@@ -162,90 +162,81 @@ function renderHome() {
   </h1>
 
   <div class="card">
-    <div class="section-title"><h2>Discover the provider</h2></div>
-    <div class="field full">
-      <label>Issuer <span class="hint">The realm's base URL, e.g. http://70.12.115.171:24080/realms/dev</span></label>
-      <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
-    </div>
-    <button class="btn" id="discoverBtn" type="button">Fetch provider configuration →</button>
-    <div id="discoverResult" style="display:none; margin-top:14px;"></div>
-    <p class="note" style="margin-top:14px;">
-      Optional, but a good first check: fetches <code>{issuer}/.well-known/openid-configuration</code> through this
-      server (never directly from your browser, so it's not subject to CORS either way) and shows the IdP's
-      advertised endpoints and capabilities.
-    </p>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><h2>1. Client configuration</h2></div>
+    <div class="section-title"><h2>Connection</h2></div>
     <div class="grid">
+      <div class="field full">
+        <label>Issuer <span class="hint">e.g. http://70.12.115.171:24080/realms/dev</span></label>
+        <div class="row">
+          <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
+          <button class="btn secondary" id="discoverBtn" type="button">Discover →</button>
+        </div>
+        <div id="discoverResult" style="display:none;"></div>
+      </div>
       <div class="field">
         <label>Client ID</label>
         <input type="text" id="clientId" placeholder="knowledge-agent">
       </div>
       <div class="field">
-        <label>Scope <span class="hint">Must include "openid" to receive an ID token</span></label>
+        <label>Scope <span class="hint">must include "openid"</span></label>
         <input type="text" id="scope" value="openid profile email">
       </div>
       <div class="field full">
-        <label>Redirect URI <span class="hint">This app's callback URL. Must be registered in the Keycloak client's Valid redirect URIs.</span></label>
+        <label>Redirect URI <span class="hint">must be a registered Valid redirect URI on the client</span></label>
         <input type="text" id="redirectUri" placeholder="">
       </div>
     </div>
   </div>
 
   <div class="card">
-    <div class="section-title"><h2>2. Client authentication (Authorization)</h2></div>
-    <div class="toggle-group" id="authToggle">
-      <button type="button" data-val="off" class="active">Off (Public)</button>
-      <button type="button" data-val="on">On (Confidential)</button>
-    </div>
-    <div id="authOnFields" style="display:none; margin-top:14px;">
-      <div class="grid">
-        <div class="field full">
-          <label>Client Secret <span class="hint">Copy this from the Credentials tab. It's kept in this browser's localStorage — never use a production secret here.</span></label>
-          <input type="password" id="clientSecret" placeholder="">
+    <div class="section-title"><h2>Security options</h2></div>
+    <div class="split">
+      <div class="split-col">
+        <label class="col-label">Client authentication</label>
+        <div class="toggle-group" id="authToggle">
+          <button type="button" data-val="off" class="active">Off (Public)</button>
+          <button type="button" data-val="on">On (Confidential)</button>
         </div>
+        <div id="authOnFields" style="display:none; margin-top:12px;">
+          <input type="password" id="clientSecret" placeholder="Client secret" style="margin-bottom:8px;">
+          <div class="toggle-group" id="authMethodToggle">
+            <button type="button" data-val="post" class="active">Body</button>
+            <button type="button" data-val="basic">Header</button>
+          </div>
+        </div>
+        <details class="hint-details">
+          <summary>Why?</summary>
+          <p>Off = token exchange with no secret (Public). On = the secret is sent along (Confidential) — but never
+            in the authorization request, only in Step 3's back-channel call. Body vs. Header switches whether it
+            travels as <code>client_secret</code> in the form body or as an <code>Authorization: Basic</code> header.</p>
+        </details>
       </div>
-      <label style="display:block; margin-top:4px;">Delivery method</label>
-      <div class="toggle-group" id="authMethodToggle">
-        <button type="button" data-val="post" class="active">Body (client_secret_post)</button>
-        <button type="button" data-val="basic">Header (client_secret_basic)</button>
+      <div class="split-col">
+        <label class="col-label">PKCE</label>
+        <div class="toggle-group" id="pkceToggle">
+          <button type="button" data-val="off" class="active">Off</button>
+          <button type="button" data-val="on">On</button>
+        </div>
+        <div id="pkceOnFields" style="display:none; margin-top:12px;">
+          <div class="toggle-group" id="pkceMethodToggle">
+            <button type="button" data-val="S256" class="active">S256</button>
+            <button type="button" data-val="plain">plain</button>
+          </div>
+        </div>
+        <details class="hint-details">
+          <summary>Why?</summary>
+          <p>When On, a code_verifier is generated and held server-side. Only its hashed code_challenge goes in the
+            authorization request; the verifier itself is presented later, in Step 3.</p>
+        </details>
       </div>
     </div>
-    <p class="note" style="margin-top:14px;">
-      Off = token exchange without a secret (Public). On = the secret is sent along (Confidential).
-      <b>The secret is never included in the authorization request (Step 1) URL</b> — it's only ever sent in
-      Step 3 (server ↔ IdP back-channel). Switch between Body (client_secret_post) and Header (Basic) to compare
-      the actual wire format.
-    </p>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><h2>3. PKCE</h2></div>
-    <div class="toggle-group" id="pkceToggle">
-      <button type="button" data-val="off" class="active">Off</button>
-      <button type="button" data-val="on">On</button>
-    </div>
-    <div id="pkceOnFields" style="display:none; margin-top:14px;">
-      <label>Code Challenge Method</label>
-      <div class="toggle-group" id="pkceMethodToggle">
-        <button type="button" data-val="S256" class="active">S256 (recommended)</button>
-        <button type="button" data-val="plain">plain</button>
-      </div>
-    </div>
-    <p class="note" style="margin-top:14px;">
-      When On, the server generates and holds a code_verifier. The authorization request (Step 1) only carries
-      the code_challenge; the actual code_verifier is presented later, in the token exchange (Step 3).
-    </p>
   </div>
 
   <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
 
-  <div class="card" id="step1Card" style="display:none; margin-top:18px;">
+  <div class="card" id="step1Card" style="display:none; margin-top:14px;">
     <div class="section-title"><h2>Step 1 · Authorization Request</h2></div>
     <div id="step1Body"></div>
-    <button class="btn block" id="goBtn" style="margin-top:14px;">Send request → (continue to IdP login)</button>
+    <button class="btn block" id="goBtn" style="margin-top:14px;">Send request →</button>
   </div>
 
   <div class="card" id="historyCard">
