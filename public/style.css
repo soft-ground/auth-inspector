@@ -23,28 +23,36 @@ body{
 .protocol-tab.active{ background:var(--primary); color:#fff; }
 .protocol-tab.disabled{ opacity:.55; cursor:not-allowed; border:1px dashed var(--border); }
 
-.wrap{ max-width:760px; margin:0 auto; padding:32px 20px 90px; }
+.wrap{ max-width:1120px; margin:0 auto; padding:32px 20px 90px; }
+
+/* Left = sequential inputs/actions, right = results (kept side by side so
+   long response bodies don't push the inputs off screen). Draggable via
+   .layout-resizer; double-click it to reset to an even 50/50 split. */
+.layout{ display:flex; align-items:flex-start; gap:0; margin-top:20px; }
+.layout-left{ flex:0 0 380px; min-width:280px; position:sticky; top:20px; padding-right:20px; }
+.layout-right{ flex:1; min-width:320px; padding-left:20px; }
+.layout-resizer{
+  flex:0 0 10px; align-self:stretch; position:relative; cursor:col-resize;
+}
+.layout-resizer::before{
+  content:""; position:absolute; top:0; bottom:0; left:50%; width:1px;
+  background:var(--border); transform:translateX(-50%);
+}
+.layout-resizer:hover::before, .layout-resizer.dragging::before{ background:var(--primary); width:3px; }
+@media (max-width:900px){
+  .layout{ flex-direction:column; }
+  .layout-left{ position:static; flex-basis:auto !important; width:100%; padding-right:0; }
+  .layout-right{ padding-left:0; }
+  .layout-resizer{ display:none; }
+}
 h1{ font-size:21px; margin:0 0 4px; }
 h1 small{ display:block; font-size:13px; font-weight:500; color:var(--muted); margin-top:6px; }
 h2{ font-size:14px; margin:0; }
 .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px 22px; margin-bottom:14px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
-.grid{ display:grid; grid-template-columns:1fr 1fr; gap:4px 18px; }
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
-.field.full{ grid-column:1 / -1; }
+.field:last-child{ margin-bottom:0; }
 label{ font-size:13px; font-weight:600; }
 label .hint{ font-weight:400; color:var(--muted); font-size:12px; display:block; margin-top:2px; }
-.row{ display:flex; gap:8px; align-items:flex-start; }
-.row input{ flex:1; }
-
-/* Two-column "Security options" layout, stacks on narrow screens */
-.split{ display:flex; gap:24px; }
-.split-col{ flex:1; min-width:0; }
-.split-col + .split-col{ border-left:1px solid var(--border); padding-left:24px; }
-.col-label{ display:block; font-size:13px; font-weight:600; margin-bottom:8px; }
-@media (max-width:640px){
-  .split{ flex-direction:column; gap:18px; }
-  .split-col + .split-col{ border-left:none; padding-left:0; border-top:1px solid var(--border); padding-top:18px; }
-}
 
 /* Collapsed-by-default explanations, opt-in detail */
 details.hint-details{ margin-top:10px; font-size:12px; color:var(--muted); }
@@ -82,10 +90,19 @@ table.kv code{ font-family:var(--mono); word-break:break-all; }
 .badge.bad{ background:var(--bad-bg); color:var(--bad); }
 .badge.muted{ background:#eef0f4; color:var(--muted); }
 .badges{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.step{ display:flex; gap:14px; }
-.step .num{ flex:0 0 28px; height:28px; border-radius:50%; background:var(--primary); color:#fff;
-  display:flex; align-items:center; justify-content:center; font-weight:800; font-size:13px; }
-.step-body{ flex:1; min-width:0; }
+
+/* Result tabs (right column): one bar of buttons, matching .tab-panel by data-tab */
+.tabs{ display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:16px; flex-wrap:wrap; }
+.tab-btn{
+  padding:8px 14px; border:none; background:transparent; font-size:13px; font-weight:700;
+  color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px;
+}
+.tab-btn:hover{ color:var(--ink); }
+.tab-btn.active{ color:var(--primary); border-bottom-color:var(--primary); }
+.tab-panel{ display:none; }
+.tab-panel.active{ display:block; }
+.placeholder{ color:var(--muted); font-size:13px; text-align:center; padding:60px 16px; }
+
 .secret{ cursor:pointer; font-family:var(--mono); }
 .secret::after{ content:" 👁"; opacity:.5; }
 .section-title{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap; }

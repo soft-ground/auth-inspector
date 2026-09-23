@@ -141,6 +141,64 @@ function page(title, bodyHtml) {
 ${bodyHtml}
 <script>
 function revealSecret(el){ el.textContent = el.dataset.value; el.classList.remove('mask'); }
+
+// Generic tab switching for any ".tab-group" (a ".tabs" bar of ".tab-btn"
+// alongside sibling ".tab-panel" elements, matched by data-tab).
+document.querySelectorAll('.tab-group').forEach((group) => {
+  group.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      group.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      group.querySelectorAll('.tab-panel').forEach((p) => {
+        p.classList.toggle('active', p.dataset.tab === btn.dataset.tab);
+      });
+    });
+  });
+});
+
+// Draggable divider between .layout-left and .layout-right. Width is
+// remembered in localStorage; double-click resets to an even 50/50 split.
+document.querySelectorAll('.layout').forEach((layout) => {
+  const left = layout.querySelector('.layout-left');
+  const resizer = layout.querySelector('.layout-resizer');
+  if (!left || !resizer) return;
+
+  const saved = Number(localStorage.getItem('auth-inspector:leftWidth'));
+  if (saved) left.style.flexBasis = saved + 'px';
+
+  function clamp(px) {
+    const max = layout.clientWidth - 320 - resizer.offsetWidth;
+    return Math.min(Math.max(px, 280), Math.max(280, max));
+  }
+
+  let dragging = false, startX = 0, startWidth = 0;
+  resizer.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startWidth = left.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    left.style.flexBasis = clamp(startWidth + (e.clientX - startX)) + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    localStorage.setItem('auth-inspector:leftWidth', Math.round(left.getBoundingClientRect().width));
+  });
+  resizer.addEventListener('dblclick', () => {
+    const half = clamp(Math.round(layout.clientWidth / 2));
+    left.style.flexBasis = half + 'px';
+    localStorage.setItem('auth-inspector:leftWidth', half);
+  });
+});
 </script>
 </body>
 </html>`;
@@ -158,85 +216,91 @@ function renderHome() {
   return page('OIDC test', `
 <div class="wrap">
   <h1>OIDC client test
-    <small>Run the OIDC Authorization Code flow against Keycloak (or any OIDC IdP) and inspect every request and response along the way.</small>
+    <small>Run the OIDC Authorization Code flow against Keycloak (or any OIDC IdP). Configure and act on the left, watch each request/response appear on the right.</small>
   </h1>
 
-  <div class="card">
-    <div class="section-title"><h2>Connection</h2></div>
-    <div class="grid">
-      <div class="field full">
-        <label>Issuer <span class="hint">e.g. http://70.12.115.171:24080/realms/dev</span></label>
-        <div class="row">
+  <div class="layout">
+    <div class="layout-left">
+      <div class="card">
+        <div class="section-title"><h2>Connection</h2></div>
+        <div class="field">
+          <label>Issuer <span class="hint">e.g. http://70.12.115.171:24080/realms/dev</span></label>
           <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
-          <button class="btn secondary" id="discoverBtn" type="button">Discover →</button>
         </div>
-        <div id="discoverResult" style="display:none;"></div>
+        <button class="btn secondary" id="discoverBtn" type="button" style="margin-bottom:14px;">Discover →</button>
+        <div class="field">
+          <label>Client ID</label>
+          <input type="text" id="clientId" placeholder="knowledge-agent">
+        </div>
+        <div class="field">
+          <label>Scope <span class="hint">must include "openid"</span></label>
+          <input type="text" id="scope" value="openid profile email">
+        </div>
+        <div class="field">
+          <label>Redirect URI <span class="hint">must be a registered Valid redirect URI on the client</span></label>
+          <input type="text" id="redirectUri" placeholder="">
+        </div>
       </div>
-      <div class="field">
-        <label>Client ID</label>
-        <input type="text" id="clientId" placeholder="knowledge-agent">
+
+      <div class="card">
+        <div class="section-title"><h2>Security options</h2></div>
+        <div class="field">
+          <label>Client authentication</label>
+          <div class="toggle-group" id="authToggle">
+            <button type="button" data-val="off" class="active">Off (Public)</button>
+            <button type="button" data-val="on">On (Confidential)</button>
+          </div>
+          <div id="authOnFields" style="display:none; margin-top:12px;">
+            <input type="password" id="clientSecret" placeholder="Client secret" style="margin-bottom:8px;">
+            <div class="toggle-group" id="authMethodToggle">
+              <button type="button" data-val="post" class="active">Body</button>
+              <button type="button" data-val="basic">Header</button>
+            </div>
+          </div>
+          <details class="hint-details">
+            <summary>Why?</summary>
+            <p>Off = token exchange with no secret (Public). On = the secret is sent along (Confidential) — but never
+              in the authorization request, only in Step 3's back-channel call. Body vs. Header switches whether it
+              travels as <code>client_secret</code> in the form body or as an <code>Authorization: Basic</code> header.</p>
+          </details>
+        </div>
+        <div class="field">
+          <label>PKCE</label>
+          <div class="toggle-group" id="pkceToggle">
+            <button type="button" data-val="off" class="active">Off</button>
+            <button type="button" data-val="on">On</button>
+          </div>
+          <div id="pkceOnFields" style="display:none; margin-top:12px;">
+            <div class="toggle-group" id="pkceMethodToggle">
+              <button type="button" data-val="S256" class="active">S256</button>
+              <button type="button" data-val="plain">plain</button>
+            </div>
+          </div>
+          <details class="hint-details">
+            <summary>Why?</summary>
+            <p>When On, a code_verifier is generated and held server-side. Only its hashed code_challenge goes in the
+              authorization request; the verifier itself is presented later, in Step 3.</p>
+          </details>
+        </div>
       </div>
-      <div class="field">
-        <label>Scope <span class="hint">must include "openid"</span></label>
-        <input type="text" id="scope" value="openid profile email">
-      </div>
-      <div class="field full">
-        <label>Redirect URI <span class="hint">must be a registered Valid redirect URI on the client</span></label>
-        <input type="text" id="redirectUri" placeholder="">
+
+      <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
+      <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+    </div>
+
+    <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
+
+    <div class="layout-right">
+      <div class="card tab-group">
+        <div class="tabs" id="resultTabs">
+          <button class="tab-btn" data-tab="discovery" id="tabBtnDiscovery" style="display:none;">Discovery</button>
+          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Step 1</button>
+        </div>
+        <div class="placeholder" id="resultsPlaceholder">Run a step on the left to see its request/response here.</div>
+        <div class="tab-panel" data-tab="discovery" id="tabPanelDiscovery"></div>
+        <div class="tab-panel" data-tab="step1" id="tabPanelStep1"></div>
       </div>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="section-title"><h2>Security options</h2></div>
-    <div class="split">
-      <div class="split-col">
-        <label class="col-label">Client authentication</label>
-        <div class="toggle-group" id="authToggle">
-          <button type="button" data-val="off" class="active">Off (Public)</button>
-          <button type="button" data-val="on">On (Confidential)</button>
-        </div>
-        <div id="authOnFields" style="display:none; margin-top:12px;">
-          <input type="password" id="clientSecret" placeholder="Client secret" style="margin-bottom:8px;">
-          <div class="toggle-group" id="authMethodToggle">
-            <button type="button" data-val="post" class="active">Body</button>
-            <button type="button" data-val="basic">Header</button>
-          </div>
-        </div>
-        <details class="hint-details">
-          <summary>Why?</summary>
-          <p>Off = token exchange with no secret (Public). On = the secret is sent along (Confidential) — but never
-            in the authorization request, only in Step 3's back-channel call. Body vs. Header switches whether it
-            travels as <code>client_secret</code> in the form body or as an <code>Authorization: Basic</code> header.</p>
-        </details>
-      </div>
-      <div class="split-col">
-        <label class="col-label">PKCE</label>
-        <div class="toggle-group" id="pkceToggle">
-          <button type="button" data-val="off" class="active">Off</button>
-          <button type="button" data-val="on">On</button>
-        </div>
-        <div id="pkceOnFields" style="display:none; margin-top:12px;">
-          <div class="toggle-group" id="pkceMethodToggle">
-            <button type="button" data-val="S256" class="active">S256</button>
-            <button type="button" data-val="plain">plain</button>
-          </div>
-        </div>
-        <details class="hint-details">
-          <summary>Why?</summary>
-          <p>When On, a code_verifier is generated and held server-side. Only its hashed code_challenge goes in the
-            authorization request; the verifier itself is presented later, in Step 3.</p>
-        </details>
-      </div>
-    </div>
-  </div>
-
-  <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
-
-  <div class="card" id="step1Card" style="display:none; margin-top:14px;">
-    <div class="section-title"><h2>Step 1 · Authorization Request</h2></div>
-    <div id="step1Body"></div>
-    <button class="btn block" id="goBtn" style="margin-top:14px;">Send request →</button>
   </div>
 
   <div class="card" id="historyCard">
@@ -248,17 +312,6 @@ function renderHome() {
 `);
 }
 
-function stepCard(num, title, bodyHtml, badgeHtml = '') {
-  return `<div class="card">
-    <div class="step">
-      <div class="num">${num}</div>
-      <div class="step-body">
-        <div class="section-title"><h2>${escapeHtml(title)}</h2>${badgeHtml}</div>
-        ${bodyHtml}
-      </div>
-    </div>
-  </div>`;
-}
 function badge(ok, textOk = 'OK', textBad = 'Failed') {
   if (ok === null || ok === undefined) return `<span class="badge muted">N/A</span>`;
   return `<span class="badge ${ok ? 'ok' : 'bad'}">${escapeHtml(ok ? textOk : textBad)}</span>`;
@@ -275,42 +328,27 @@ function kvTable(obj, maskKeys = []) {
   return `<table class="kv">${rows}</table>`;
 }
 
-function renderReport(run) {
-  const cfg = run.config;
-  let html = `<div class="wrap">
-    <a href="/" style="font-size:13px; color:var(--muted);">← New test</a>
-    <h1 style="margin-top:10px;">Test report
-      <small>${escapeHtml(cfg.clientId)} · Client authentication: <b>${cfg.authOn ? `On (${cfg.authMethod})` : 'Off'}</b> · PKCE: <b>${cfg.pkceOn ? `On (${cfg.pkceMethod})` : 'Off'}</b></small>
-    </h1>`;
+// Builds the { label, title, badge, body } entries for whichever steps this
+// run has data for, in order. Used to drive the right-hand tab strip.
+function buildStepEntries(run) {
+  const entries = [];
 
-  html += stepCard(1, 'Authorization Request — browser → IdP (navigation, no CORS involved)',
-    kvTable(run.step1.params) +
-    `<div class="note" style="margin-top:10px; word-break:break-all;">Full URL: <code>${escapeHtml(run.step1.url)}</code></div>`
-  );
+  entries.push({
+    key: '1', label: 'Step 1',
+    title: 'Authorization Request — browser → IdP (navigation, no CORS involved)',
+    badge: '',
+    body: kvTable(run.step1.params) +
+      `<div class="note" style="margin-top:10px; word-break:break-all;">Full URL: <code>${escapeHtml(run.step1.url)}</code></div>`,
+  });
 
   if (run.step2) {
     const hasError = !!run.step2.query.error;
-    html += stepCard(2, 'Authorization Response — IdP → callback',
-      kvTable(run.step2.query),
-      badge(!hasError, 'Code received', 'Error response')
-    );
-  }
-
-  if (run.status === 'auth_error' || run.status === 'no_code') {
-    html += `<div class="card"><p class="note">The IdP returned an error (or no code) during authorization, so the token exchange was skipped.</p></div>`;
-    html += `</div>`;
-    return page('Test report', html);
-  }
-
-  if (run.status === 'awaiting_exchange') {
-    html += `<div class="card">
-      <div class="section-title"><h2>Ready for Step 3</h2></div>
-      <p class="note">A single-use authorization code has been received. Nothing else happens automatically — click below to
-        exchange it for tokens over the server ↔ IdP back-channel, and see exactly what's sent.</p>
-      <form method="POST" action="/report/${escapeHtml(run.id)}/exchange">
-        <button class="btn block" type="submit" style="margin-top:12px;">Exchange code for tokens →</button>
-      </form>
-    </div>`;
+    entries.push({
+      key: '2', label: 'Step 2',
+      title: 'Authorization Response — IdP → callback',
+      badge: badge(!hasError, 'Code received', 'Error response'),
+      body: kvTable(run.step2.query),
+    });
   }
 
   if (run.step3) {
@@ -319,50 +357,134 @@ function renderReport(run) {
     if (run.step3.body.code_verifier) maskKeys.push('code_verifier');
     if (run.step3.body.code) maskKeys.push('code');
     const headerMask = run.step3.headers.Authorization ? ['Authorization'] : [];
-    html += stepCard(3, 'Token Request — server → IdP (back-channel, no CORS involved)',
-      `<div class="sub">${run.step3.method} <code>${escapeHtml(run.step3.url)}</code></div>
-       <div class="kv-title">Headers</div>${kvTable(run.step3.headers, headerMask)}
-       <div class="kv-title">Body (application/x-www-form-urlencoded)</div>${kvTable(run.step3.body, maskKeys)}`
-    );
+    entries.push({
+      key: '3', label: 'Step 3',
+      title: 'Token Request — server → IdP (back-channel, no CORS involved)',
+      badge: '',
+      body: `<div class="sub">${run.step3.method} <code>${escapeHtml(run.step3.url)}</code></div>
+        <div class="kv-title">Headers</div>${kvTable(run.step3.headers, headerMask)}
+        <div class="kv-title">Body (application/x-www-form-urlencoded)</div>${kvTable(run.step3.body, maskKeys)}`,
+    });
   }
 
   if (run.step4) {
     const ok = typeof run.step4.status === 'number' && run.step4.status >= 200 && run.step4.status < 300;
-    html += stepCard(4, `Token Response — HTTP ${run.step4.status ?? 'ERR'} ${escapeHtml(run.step4.statusText ?? '')}`,
-      pre(run.step4.body ?? run.step4.error),
-      badge(ok, 'Token issued', 'Token request failed')
-    );
+    entries.push({
+      key: '4', label: 'Step 4',
+      title: `Token Response — HTTP ${run.step4.status ?? 'ERR'} ${escapeHtml(run.step4.statusText ?? '')}`,
+      badge: badge(ok, 'Token issued', 'Token request failed'),
+      body: pre(run.step4.body ?? run.step4.error),
+    });
   }
 
   if (run.step5?.idToken) {
     const t = run.step5.idToken;
-    html += stepCard(5, 'ID Token — decode & verify',
-      t.opaque ? `<div class="note">Not a JWT.</div>` :
-      `<div class="kv-title">Header</div>${pre(t.header)}
-       <div class="kv-title">Payload</div>${pre(t.payload)}
-       <div class="badges">
-         ${badge(t.verify.verified, 'Signature valid', 'Signature invalid')}
-         ${badge(t.audOk, 'Audience matches', 'Audience mismatch')}
-         ${badge(t.nonceOk, 'Nonce matches', 'Nonce mismatch')}
-       </div>
-       ${!t.verify.verified ? `<div class="note" style="margin-top:8px;">${escapeHtml(t.verify.error)}</div>` : ''}`
-    );
+    entries.push({
+      key: '5', label: 'Step 5',
+      title: 'ID Token — decode & verify',
+      badge: t.opaque ? '' : badge(t.verify.verified, 'Verified', 'Invalid'),
+      body: t.opaque ? `<div class="note">Not a JWT.</div>` :
+        `<div class="kv-title">Header</div>${pre(t.header)}
+         <div class="kv-title">Payload</div>${pre(t.payload)}
+         <div class="badges">
+           ${badge(t.verify.verified, 'Signature valid', 'Signature invalid')}
+           ${badge(t.audOk, 'Audience matches', 'Audience mismatch')}
+           ${badge(t.nonceOk, 'Nonce matches', 'Nonce mismatch')}
+         </div>
+         ${!t.verify.verified ? `<div class="note" style="margin-top:8px;">${escapeHtml(t.verify.error)}</div>` : ''}`,
+    });
   }
   if (run.step5?.accessToken) {
     const t = run.step5.accessToken;
-    html += stepCard(6, 'Access Token — decode & verify',
-      t.opaque ? `<div class="note">Not a JWT — likely an opaque token (this can be normal).</div>` :
-      `<div class="kv-title">Header</div>${pre(t.header)}
-       <div class="kv-title">Payload</div>${pre(t.payload)}
-       <div class="badges">
-         ${badge(t.verify.verified, 'Signature valid', 'Signature invalid')}
-         ${badge(t.audOk, 'Audience/azp matches', 'Audience/azp mismatch')}
-       </div>
-       ${!t.verify.verified ? `<div class="note" style="margin-top:8px;">${escapeHtml(t.verify.error)}</div>` : ''}`
-    );
+    entries.push({
+      key: '6', label: 'Step 6',
+      title: 'Access Token — decode & verify',
+      badge: t.opaque ? '' : badge(t.verify.verified, 'Verified', 'Invalid'),
+      body: t.opaque ? `<div class="note">Not a JWT — likely an opaque token (this can be normal).</div>` :
+        `<div class="kv-title">Header</div>${pre(t.header)}
+         <div class="kv-title">Payload</div>${pre(t.payload)}
+         <div class="badges">
+           ${badge(t.verify.verified, 'Signature valid', 'Signature invalid')}
+           ${badge(t.audOk, 'Audience/azp matches', 'Audience/azp mismatch')}
+         </div>
+         ${!t.verify.verified ? `<div class="note" style="margin-top:8px;">${escapeHtml(t.verify.error)}</div>` : ''}`,
+    });
   }
 
-  html += `</div>`;
+  return entries;
+}
+
+const STATUS_BADGE = {
+  success: () => badge(true, 'Success'),
+  awaiting_exchange: () => `<span class="badge muted">Awaiting exchange</span>`,
+  auth_error: () => badge(false, '', 'Auth error'),
+  no_code: () => badge(false, '', 'No code'),
+  token_error: () => badge(false, '', 'Token error'),
+  fetch_error: () => badge(false, '', 'Network error'),
+};
+
+function renderReport(run) {
+  const cfg = run.config;
+  const entries = buildStepEntries(run);
+  const activeKey = entries[entries.length - 1]?.key;
+
+  const tabsHtml = entries.map((e) =>
+    `<button class="tab-btn${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">${escapeHtml(e.label)}</button>`
+  ).join('');
+  const panelsHtml = entries.map((e) =>
+    `<div class="tab-panel${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">
+      <div class="section-title"><h2>${escapeHtml(e.title)}</h2>${e.badge}</div>
+      ${e.body}
+    </div>`
+  ).join('');
+
+  let leftExtra;
+  if (run.status === 'awaiting_exchange') {
+    leftExtra = `
+      <p class="note">A single-use authorization code has been received. Nothing else happens automatically —
+        this sends it over the server ↔ IdP back-channel and shows exactly what's exchanged.</p>
+      <form method="POST" action="/report/${escapeHtml(run.id)}/exchange">
+        <button class="btn block" type="submit">Exchange code for tokens →</button>
+      </form>`;
+  } else if (run.status === 'auth_error' || run.status === 'no_code') {
+    leftExtra = `
+      <p class="note">The IdP returned an error (or no code) during authorization, so the token exchange was skipped.</p>
+      <a class="btn block secondary" href="/">Start a new test →</a>`;
+  } else {
+    leftExtra = `<a class="btn block secondary" href="/">Start a new test →</a>`;
+  }
+
+  const html = `<div class="wrap">
+    <a href="/" style="font-size:13px; color:var(--muted);">← New test</a>
+    <h1 style="margin-top:10px;">Test report
+      <small>${escapeHtml(cfg.clientId)} · Client authentication: <b>${cfg.authOn ? `On (${cfg.authMethod})` : 'Off'}</b> · PKCE: <b>${cfg.pkceOn ? `On (${cfg.pkceMethod})` : 'Off'}</b></small>
+    </h1>
+
+    <div class="layout">
+      <div class="layout-left">
+        <div class="card">
+          <div class="section-title"><h2>Run summary</h2></div>
+          <table class="kv">
+            <tr><td>Client ID</td><td><code>${escapeHtml(cfg.clientId)}</code></td></tr>
+            <tr><td>Issuer</td><td><code style="word-break:break-all;">${escapeHtml(cfg.issuer)}</code></td></tr>
+            <tr><td>Redirect URI</td><td><code style="word-break:break-all;">${escapeHtml(cfg.redirectUri)}</code></td></tr>
+            <tr><td>Status</td><td>${(STATUS_BADGE[run.status] || (() => escapeHtml(run.status)))()}</td></tr>
+          </table>
+        </div>
+        ${leftExtra}
+      </div>
+
+      <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
+
+      <div class="layout-right">
+        <div class="card tab-group">
+          <div class="tabs" id="resultTabs">${tabsHtml}</div>
+          ${panelsHtml}
+        </div>
+      </div>
+    </div>
+  </div>`;
+
   return page('Test report', html);
 }
 
