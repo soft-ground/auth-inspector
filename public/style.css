@@ -16,21 +16,27 @@ body{
   padding:14px 24px; background:#fff; border-bottom:1px solid var(--border);
 }
 .brand{ font-weight:800; font-size:15px; color:var(--ink); text-decoration:none; }
+.topbar-right{ display:flex; align-items:center; gap:18px; }
 .protocol-nav{ display:flex; gap:6px; }
 .protocol-tab{
   padding:6px 12px; border-radius:999px; font-size:12.5px; font-weight:700; color:var(--muted);
 }
 .protocol-tab.active{ background:var(--primary); color:#fff; }
 .protocol-tab.disabled{ opacity:.55; cursor:not-allowed; border:1px dashed var(--border); }
+.topbar-link{ font-size:12.5px; font-weight:700; color:var(--muted); text-decoration:none; }
+.topbar-link:hover{ color:var(--ink); }
 
 .wrap{ max-width:1120px; margin:0 auto; padding:32px 20px 90px; }
 
 /* Left = sequential inputs/actions, right = results (kept side by side so
-   long response bodies don't push the inputs off screen). Draggable via
-   .layout-resizer; double-click it to reset to an even 50/50 split. */
-.layout{ display:flex; align-items:flex-start; gap:0; margin-top:20px; }
-.layout-left{ flex:0 0 380px; min-width:280px; position:sticky; top:20px; padding-right:20px; }
-.layout-right{ flex:1; min-width:320px; padding-left:20px; }
+   long response bodies don't push the inputs off screen). align-items:stretch
+   makes the right column match the left column's height (instead of just
+   hugging its own, usually much shorter, content) — see .tab-group/.tab-panel/
+   pre below, which propagate that height down to the actual result content.
+   Draggable via .layout-resizer; double-click it to reset to an even 50/50 split. */
+.layout{ display:flex; align-items:stretch; gap:0; margin-top:20px; }
+.layout-left{ flex:0 0 380px; min-width:280px; position:sticky; top:20px; align-self:flex-start; padding-right:20px; }
+.layout-right{ flex:1; min-width:320px; padding-left:20px; display:flex; flex-direction:column; }
 .layout-resizer{
   flex:0 0 10px; align-self:stretch; position:relative; cursor:col-resize;
 }
@@ -49,6 +55,7 @@ h1{ font-size:21px; margin:0 0 4px; }
 h1 small{ display:block; font-size:13px; font-weight:500; color:var(--muted); margin-top:6px; }
 h2{ font-size:14px; margin:0; }
 .card{ background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px 22px; margin-bottom:14px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+.card.tab-group{ flex:1; display:flex; flex-direction:column; min-height:0; }
 .field{ display:flex; flex-direction:column; gap:6px; margin-bottom:14px; }
 .field:last-child{ margin-bottom:0; }
 label{ font-size:13px; font-weight:600; }
@@ -79,12 +86,22 @@ input:focus, select:focus{ outline:none; border-color:var(--primary); box-shadow
 .btn.block{ width:100%; }
 pre{
   background:#0f1115; color:#e6e8eb; padding:14px 16px; border-radius:10px; overflow:auto;
-  font-family: var(--mono); font-size:12.5px; margin:8px 0 0; max-height:420px; white-space:pre-wrap; word-break:break-all;
+  font-family: var(--mono); font-size:12.5px; margin:8px 0 0;
+  flex:1; min-height:140px; white-space:pre-wrap; word-break:break-all;
 }
 table.kv{ width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
 table.kv td{ padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
 table.kv td:first-child{ font-family:var(--mono); color:var(--muted); white-space:nowrap; width:190px; }
 table.kv code{ font-family:var(--mono); word-break:break-all; }
+
+table.runs{ width:100%; border-collapse:collapse; font-size:13px; }
+table.runs th{
+  text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--muted); padding:8px; border-bottom:1px solid var(--border);
+}
+table.runs td{ padding:10px 8px; border-bottom:1px solid var(--border); vertical-align:middle; }
+table.runs tr:last-child td{ border-bottom:none; }
+table.runs code{ font-family:var(--mono); }
 .badge{ display:inline-block; padding:2px 10px; border-radius:999px; font-size:11.5px; font-weight:700; }
 .badge.ok{ background:var(--ok-bg); color:var(--ok); }
 .badge.bad{ background:var(--bad-bg); color:var(--bad); }
@@ -100,8 +117,11 @@ table.kv code{ font-family:var(--mono); word-break:break-all; }
 .tab-btn:hover{ color:var(--ink); }
 .tab-btn.active{ color:var(--primary); border-bottom-color:var(--primary); }
 .tab-panel{ display:none; }
-.tab-panel.active{ display:block; }
-.placeholder{ color:var(--muted); font-size:13px; text-align:center; padding:60px 16px; }
+.tab-panel.active{ display:flex; flex-direction:column; flex:1; min-height:0; }
+.placeholder{
+  flex:1; min-height:200px; color:var(--muted); font-size:13px;
+  display:flex; align-items:center; justify-content:center; text-align:center; padding:16px;
+}
 
 .secret{ cursor:pointer; font-family:var(--mono); }
 .secret::after{ content:" 👁"; opacity:.5; }
