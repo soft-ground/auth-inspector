@@ -149,25 +149,11 @@ $('startBtn').addEventListener('click', async () => {
   $('goBtn').style.display = '';
 });
 
+// Opens in a new tab rather than navigating this one away: the IdP's login
+// page can't be embedded in an iframe here (Keycloak sends
+// frame-ancestors 'self'), so a new tab is the only way to keep this page
+// (and everything filled in on the left) visible while you log in. The new
+// tab lands on our own /callback → /report/:state once you're done.
 $('goBtn').addEventListener('click', () => {
-  if (lastAuthUrl) location.href = lastAuthUrl;
+  if (lastAuthUrl) window.open(lastAuthUrl, '_blank', 'noopener');
 });
-
-// ── Recent runs (bottom, full width) ────────────────────────────────────────
-async function loadHistory() {
-  const res = await fetch('/api/runs');
-  const list = await res.json();
-  if (!list.length) {
-    $('historyBody').innerHTML = 'None yet';
-    return;
-  }
-  const badgeClass = (status) =>
-    status === 'success' ? 'ok' : status === 'pending' || status === 'awaiting_exchange' ? 'muted' : 'bad';
-  $('historyBody').innerHTML = '<table class="kv">' + list.map((r) => `
-    <tr>
-      <td>${new Date(r.createdAt).toLocaleTimeString()}</td>
-      <td>${escapeHtml(r.clientId)} · <span class="badge ${badgeClass(r.status)}">${escapeHtml(r.status)}</span>
-        · <a href="/report/${r.state}">view →</a></td>
-    </tr>`).join('') + '</table>';
-}
-loadHistory();

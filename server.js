@@ -133,10 +133,13 @@ function page(title, bodyHtml) {
 <body>
 <header class="topbar">
   <a href="/" class="brand">🔎 auth-inspector</a>
-  <nav class="protocol-nav">
-    <span class="protocol-tab active">OIDC</span>
-    <span class="protocol-tab disabled" title="Planned for a future release">SAML (coming soon)</span>
-  </nav>
+  <div class="topbar-right">
+    <nav class="protocol-nav">
+      <span class="protocol-tab active">OIDC</span>
+      <span class="protocol-tab disabled" title="Planned for a future release">SAML (coming soon)</span>
+    </nav>
+    <a href="/runs" class="topbar-link">Recent runs</a>
+  </div>
 </header>
 ${bodyHtml}
 <script>
@@ -227,7 +230,7 @@ function renderHome() {
           <label>Issuer <span class="hint">e.g. http://70.12.115.171:24080/realms/dev</span></label>
           <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
         </div>
-        <button class="btn secondary" id="discoverBtn" type="button" style="margin-bottom:14px;">Discover →</button>
+        <button class="btn block" id="discoverBtn" type="button" style="margin-bottom:14px;">Discover →</button>
         <div class="field">
           <label>Client ID</label>
           <input type="text" id="clientId" placeholder="knowledge-agent">
@@ -301,11 +304,6 @@ function renderHome() {
         <div class="tab-panel" data-tab="step1" id="tabPanelStep1"></div>
       </div>
     </div>
-  </div>
-
-  <div class="card" id="historyCard">
-    <div class="section-title"><h2>Recent test runs</h2></div>
-    <div id="historyBody" class="note">None yet</div>
   </div>
 </div>
 <script src="/static/home.js"></script>
@@ -416,6 +414,7 @@ function buildStepEntries(run) {
 
 const STATUS_BADGE = {
   success: () => badge(true, 'Success'),
+  pending: () => `<span class="badge muted">Pending</span>`,
   awaiting_exchange: () => `<span class="badge muted">Awaiting exchange</span>`,
   auth_error: () => badge(false, '', 'Auth error'),
   no_code: () => badge(false, '', 'No code'),
@@ -488,9 +487,40 @@ function renderReport(run) {
   return page('Test report', html);
 }
 
+function renderRuns() {
+  const list = [...runs.entries()]
+    .sort((a, b) => b[1].createdAt - a[1].createdAt)
+    .slice(0, 50);
+
+  const rows = list.length
+    ? list.map(([state, r]) => `
+        <tr>
+          <td>${escapeHtml(new Date(r.createdAt).toLocaleString())}</td>
+          <td><code>${escapeHtml(r.config.clientId)}</code></td>
+          <td>${(STATUS_BADGE[r.status] || (() => escapeHtml(r.status)))()}</td>
+          <td><a href="/report/${state}">View →</a></td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" class="note">No runs yet — start one from the home page.</td></tr>`;
+
+  return page('Recent runs', `
+    <div class="wrap" style="max-width:760px;">
+      <a href="/" style="font-size:13px; color:var(--muted);">← New test</a>
+      <h1 style="margin-top:10px;">Recent test runs</h1>
+      <div class="card">
+        <table class="runs">
+          <thead><tr><th>Time</th><th>Client ID</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+  `);
+}
+
 // ── Routes ──────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => res.send(renderHome()));
+
+app.get('/runs', (req, res) => res.send(renderRuns()));
 
 app.post('/start', (req, res) => {
   const { issuer, clientId, clientSecret, redirectUri, scope, authOn, authMethod, pkceOn, pkceMethod } = req.body || {};
