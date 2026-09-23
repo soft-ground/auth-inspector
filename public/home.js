@@ -21,6 +21,21 @@ function setupToggle(groupId, onChange) {
   return { get: () => val };
 }
 
+// Reveals a result tab (if hidden), fills its panel, and switches to it.
+// Mirrors the click-driven tab switching wired up in the shared page() script.
+function showResult(tabKey, html) {
+  $('resultsPlaceholder').style.display = 'none';
+
+  const btn = $('tabBtn' + tabKey[0].toUpperCase() + tabKey.slice(1));
+  if (btn) btn.style.display = '';
+
+  const panel = $('tabPanel' + tabKey[0].toUpperCase() + tabKey.slice(1));
+  if (panel) panel.innerHTML = html;
+
+  document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tabKey));
+  document.querySelectorAll('.tab-group .tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.tab === tabKey));
+}
+
 // ── Remember field values locally for convenience ─────────────────────────
 const FIELDS = ['issuer', 'clientId', 'scope', 'redirectUri', 'clientSecret'];
 FIELDS.forEach((id) => {
@@ -59,9 +74,7 @@ $('discoverBtn').addEventListener('click', async () => {
     return;
   }
 
-  const box = $('discoverResult');
-  box.style.display = 'block';
-  box.innerHTML = '<div class="note">Fetching…</div>';
+  showResult('discovery', '<div class="note">Fetching…</div>');
 
   const res = await fetch('/discover', {
     method: 'POST',
@@ -71,19 +84,20 @@ $('discoverBtn').addEventListener('click', async () => {
   const data = await res.json();
 
   if (data.error) {
-    box.innerHTML = `<div class="note">Request to <code>${escapeHtml(data.url)}</code> failed: ${escapeHtml(data.error)}</div>`;
+    showResult('discovery', `<div class="note">Request to <code>${escapeHtml(data.url)}</code> failed: ${escapeHtml(data.error)}</div>`);
     return;
   }
 
   const ok = data.status >= 200 && data.status < 300;
-  box.innerHTML = `
+  showResult('discovery', `
     <div class="sub">GET <code>${escapeHtml(data.url)}</code> — HTTP ${data.status} ${escapeHtml(data.statusText || '')}
       <span class="badge ${ok ? 'ok' : 'bad'}" style="margin-left:6px;">${ok ? 'Reachable' : 'Failed'}</span>
     </div>
     <pre>${escapeHtml(JSON.stringify(data.body, null, 2))}</pre>
-  `;
+  `);
 });
 
+// ── Step 1: build the authorization request ────────────────────────────────
 let lastAuthUrl = null;
 
 $('startBtn').addEventListener('click', async () => {
@@ -123,22 +137,23 @@ $('startBtn').addEventListener('click', async () => {
     ? `PKCE is On → <code>code_challenge</code> (${payload.pkceMethod}) is included. The code_verifier stays on the server and is presented in Step 3.`
     : 'PKCE is Off → no code_challenge is included.');
 
-  $('step1Card').style.display = 'block';
-  $('step1Body').innerHTML = `
+  showResult('step1', `
     <div class="note">${notes.join('<br>')}</div>
     ${renderKv(data.params)}
     <div class="sub" style="margin-top:8px; word-break:break-all;">
       Full URL: <code>${escapeHtml(data.authUrl)}</code>
       <a href="${data.authUrl}" target="_blank" rel="noopener">Open in new tab ↗</a>
     </div>
-  `;
-  $('step1Card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  `);
+
+  $('goBtn').style.display = '';
 });
 
 $('goBtn').addEventListener('click', () => {
   if (lastAuthUrl) location.href = lastAuthUrl;
 });
 
+// ── Recent runs (bottom, full width) ────────────────────────────────────────
 async function loadHistory() {
   const res = await fetch('/api/runs');
   const list = await res.json();
