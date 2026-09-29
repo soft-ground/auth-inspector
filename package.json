@@ -3,15 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "license": "MIT",
-  "description": "Run OIDC (and eventually SAML) authentication flows as a client against any IdP, and inspect every request/response along the way.",
+  "description": "Run OIDC authentication flows as a client against any IdP and inspect every request/response along the way, plus a standalone SAML Response validator.",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
     "express": "^4.19.2",
-    "jose": "^5.9.6"
+    "jose": "^5.9.6",
+    "xml-crypto": "^6.3.2",
+    "xpath": "^0.0.34"
   }
 }

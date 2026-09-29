@@ -20,9 +20,11 @@ body{
 .protocol-nav{ display:flex; gap:6px; }
 .protocol-tab{
   padding:6px 12px; border-radius:999px; font-size:12.5px; font-weight:700; color:var(--muted);
+  text-decoration:none;
 }
+.protocol-tab:hover{ color:var(--ink); }
 .protocol-tab.active{ background:var(--primary); color:#fff; }
-.protocol-tab.disabled{ opacity:.55; cursor:not-allowed; border:1px dashed var(--border); }
+.protocol-tab.active:hover{ color:#fff; }
 .topbar-link{ font-size:12.5px; font-weight:700; color:var(--muted); text-decoration:none; }
 .topbar-link:hover{ color:var(--ink); }
 
@@ -68,11 +70,12 @@ details.hint-details summary::-webkit-details-marker{ display:none; }
 details.hint-details summary::before{ content:"▸ "; }
 details.hint-details[open] summary::before{ content:"▾ "; }
 details.hint-details p{ margin:8px 0 0; }
-input[type=text], input[type=password], select{
+input[type=text], input[type=password], select, textarea{
   padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:13.5px;
   font-family: var(--mono); background:#fff; color:var(--ink); width:100%;
 }
-input:focus, select:focus{ outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(91,91,230,.15); }
+textarea{ resize:vertical; line-height:1.4; }
+input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(91,91,230,.15); }
 .toggle-group{ display:flex; gap:8px; }
 .toggle-group button{
   flex:1; padding:9px 10px; border:1px solid var(--border); background:#fff; border-radius:8px;
