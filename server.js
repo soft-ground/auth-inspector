@@ -22,6 +22,9 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { DOMParser } from '@xmldom/xmldom';
+import xpath from 'xpath';
+import { SignedXml } from 'xml-crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -120,8 +123,151 @@ async function buildTokenInfo(token, issuer, clientId, expectedNonce) {
   };
 }
 
+// ── SAML Response validation ────────────────────────────────────────────
+// Parses and validates a SAML 2.0 Response as a Relying Party would receive
+// it (e.g. from the SAMLResponse form field of an HTTP-POST binding),
+// without this app acting as an actual SP (no AuthnRequest, no ACS
+// endpoint). It only inspects what's pasted in: XML-DSig signature
+// verification, Conditions time window, AudienceRestriction, and
+// SubjectConfirmationData — plus a full parse of the assertion for display.
+
+function xall(ctxNode, localName) {
+  return xpath.select(`.//*[local-name(.)='${localName}']`, ctxNode);
+}
+function xchild(ctxNode, localName) {
+  return ctxNode ? xpath.select(`*[local-name(.)='${localName}']`, ctxNode)[0] || null : null;
+}
+function xtext(node) {
+  return node ? node.textContent.trim() : null;
+}
+function xattr(node, name) {
+  return node && node.getAttribute ? node.getAttribute(name) : null;
+}
+
+function decodeSamlInput(raw) {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('<')) return trimmed;
+  try {
+    const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
+    if (decoded.trim().startsWith('<')) return decoded;
+  } catch { /* fall through */ }
+  throw new Error('Not valid XML or base64-encoded XML.');
+}
+
+function verifySamlSignature(signatureNode, xmlString, cert) {
+  try {
+    const sig = new SignedXml({ publicCert: cert });
+    sig.loadSignature(signatureNode);
+    const verified = sig.checkSignature(xmlString);
+    return verified
+      ? { verified: true }
+      : { verified: false, error: (sig.validationErrors || []).join('; ') || 'Signature does not match.' };
+  } catch (e) {
+    return { verified: false, error: e.message };
+  }
+}
+
+function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient }) {
+  const xmlString = decodeSamlInput(raw);
+
+  const parseErrors = [];
+  const doc = new DOMParser({
+    onError: (level, msg) => { if (level !== 'warning') parseErrors.push(msg); },
+  }).parseFromString(xmlString, 'text/xml');
+  if (parseErrors.length) throw new Error('XML parse error: ' + parseErrors.join('; '));
+
+  const root = doc.documentElement;
+  if (!root) throw new Error('No root element found.');
+
+  const isBareAssertion = root.localName === 'Assertion';
+  const responseNode = isBareAssertion ? null : root;
+  const assertionNode = isBareAssertion ? root : xall(root, 'Assertion')[0] || null;
+
+  const status = responseNode ? {
+    code: xattr(xchild(xchild(responseNode, 'Status'), 'StatusCode'), 'Value'),
+  } : null;
+
+  const responseIssuer = responseNode ? xtext(xchild(responseNode, 'Issuer')) : null;
+
+  let assertion = null;
+  const signatures = [];
+
+  if (responseNode) {
+    const responseSig = xchild(responseNode, 'Signature');
+    if (responseSig) signatures.push({ scope: 'Response', node: responseSig });
+  }
+
+  if (assertionNode) {
+    const issuer = xtext(xchild(assertionNode, 'Issuer'));
+
+    const assertionSig = xchild(assertionNode, 'Signature');
+    if (assertionSig) signatures.push({ scope: 'Assertion', node: assertionSig });
+
+    const subjectNode = xchild(assertionNode, 'Subject');
+    const nameIdNode = subjectNode && xall(subjectNode, 'NameID')[0];
+    const confirmationDataNode = subjectNode && xall(subjectNode, 'SubjectConfirmationData')[0];
+    const subject = {
+      nameId: xtext(nameIdNode),
+      nameIdFormat: xattr(nameIdNode, 'Format'),
+      recipient: xattr(confirmationDataNode, 'Recipient'),
+      notOnOrAfter: xattr(confirmationDataNode, 'NotOnOrAfter'),
+      inResponseTo: xattr(confirmationDataNode, 'InResponseTo'),
+    };
+
+    const conditionsNode = xchild(assertionNode, 'Conditions');
+    const conditions = {
+      notBefore: xattr(conditionsNode, 'NotBefore'),
+      notOnOrAfter: xattr(conditionsNode, 'NotOnOrAfter'),
+      audiences: conditionsNode ? xall(conditionsNode, 'Audience').map(xtext) : [],
+    };
+
+    const authnStatementNode = xchild(assertionNode, 'AuthnStatement');
+    const authn = authnStatementNode ? {
+      authnInstant: xattr(authnStatementNode, 'AuthnInstant'),
+      sessionIndex: xattr(authnStatementNode, 'SessionIndex'),
+      contextClassRef: xtext(xall(authnStatementNode, 'AuthnContextClassRef')[0]),
+    } : null;
+
+    const attributeStatementNode = xchild(assertionNode, 'AttributeStatement');
+    const attributes = attributeStatementNode ? xall(attributeStatementNode, 'Attribute').map((a) => ({
+      name: xattr(a, 'Name'),
+      friendlyName: xattr(a, 'FriendlyName'),
+      values: xall(a, 'AttributeValue').map(xtext),
+    })) : [];
+
+    const now = new Date();
+    const notBeforeOk = !conditions.notBefore || now >= new Date(conditions.notBefore);
+    const notOnOrAfterOk = !conditions.notOnOrAfter || now < new Date(conditions.notOnOrAfter);
+    const confirmationOk = !subject.notOnOrAfter || now < new Date(subject.notOnOrAfter);
+    const audienceOk = expectedAudience ? conditions.audiences.includes(expectedAudience) : null;
+    const recipientOk = expectedRecipient ? subject.recipient === expectedRecipient : null;
+
+    assertion = {
+      issuer, subject, conditions, authn, attributes,
+      timeValid: notBeforeOk && notOnOrAfterOk,
+      confirmationValid: confirmationOk,
+      audienceOk, recipientOk,
+    };
+  }
+
+  const signatureResults = signatures.map(({ scope, node }) => ({
+    scope,
+    ...verifySamlSignature(node, xmlString, cert),
+  }));
+
+  return {
+    xml: xmlString,
+    isBareAssertion,
+    status,
+    responseIssuer,
+    assertion,
+    signatures: signatureResults,
+    anySignedAndValid: signatureResults.length > 0 && signatureResults.every((s) => s.verified),
+  };
+}
+
 // ── HTML rendering ──────────────────────────────────────────────────────
-function page(title, bodyHtml) {
+function page(title, bodyHtml, activeProtocol = 'oidc') {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -135,8 +281,8 @@ function page(title, bodyHtml) {
   <a href="/" class="brand">🔎 auth-inspector</a>
   <div class="topbar-right">
     <nav class="protocol-nav">
-      <span class="protocol-tab active">OIDC</span>
-      <span class="protocol-tab disabled" title="Planned for a future release">SAML (coming soon)</span>
+      <a href="/" class="protocol-tab${activeProtocol === 'oidc' ? ' active' : ''}">OIDC</a>
+      <a href="/saml" class="protocol-tab${activeProtocol === 'saml' ? ' active' : ''}">SAML</a>
     </nav>
     <a href="/runs" class="topbar-link">Recent runs</a>
   </div>
@@ -308,6 +454,73 @@ function renderHome() {
 </div>
 <script src="/static/home.js"></script>
 `);
+}
+
+function renderSamlHome() {
+  return page('SAML validator', `
+<div class="wrap">
+  <h1>SAML Response validator
+    <small>Paste a SAML Response (raw XML, or base64 like the browser sends in the SAMLResponse POST field) and validate its signature, timing conditions, and audience — right here, without this app acting as a real Service Provider.</small>
+  </h1>
+
+  <div class="layout">
+    <div class="layout-left">
+      <div class="card">
+        <div class="section-title"><h2>SAML Response</h2></div>
+        <div class="field">
+          <label>SAMLResponse <span class="hint">raw XML, or base64 — e.g. copy the SAMLResponse form field from the IdP's POST to your ACS endpoint</span></label>
+          <textarea id="samlInput" rows="10" placeholder="&lt;samlp:Response ...&gt;...&lt;/samlp:Response&gt;&#10;or base64: PHNhbWxwOl..."></textarea>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><h2>Verification options</h2></div>
+        <div class="field">
+          <label>IdP signing certificate (PEM) <span class="hint">used to verify the XML-DSig signature — from the IdP's metadata or, on Keycloak, the realm's signing key</span></label>
+          <textarea id="cert" rows="7" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+        </div>
+        <div class="field">
+          <label>Expected Audience <span class="hint">optional — your SP Entity ID, checked against Conditions/AudienceRestriction</span></label>
+          <input type="text" id="audience" placeholder="https://your-sp.example.com/metadata">
+        </div>
+        <div class="field">
+          <label>Expected Recipient <span class="hint">optional — your ACS URL, checked against SubjectConfirmationData</span></label>
+          <input type="text" id="recipient" placeholder="https://your-sp.example.com/acs">
+        </div>
+        <details class="hint-details">
+          <summary>What this does (and doesn't do)</summary>
+          <p>This validates a SAML Response you already have — it does not act as a Service Provider: no AuthnRequest
+            is generated, and there's no ACS endpoint to redirect an IdP to. Paste a response captured from a real
+            login (e.g. via your browser's dev tools) and this checks the XML-DSig signature on the Response and/or
+            Assertion, the Conditions time window, SubjectConfirmationData, and (if supplied) the Audience/Recipient
+            you expect.</p>
+        </details>
+      </div>
+
+      <button class="btn block" id="validateBtn" style="font-size:16px; padding:14px;">Validate response →</button>
+    </div>
+
+    <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
+
+    <div class="layout-right">
+      <div class="card tab-group">
+        <div class="tabs" id="resultTabs">
+          <button class="tab-btn" data-tab="overview" id="tabBtnOverview" style="display:none;">Overview</button>
+          <button class="tab-btn" data-tab="signature" id="tabBtnSignature" style="display:none;">Signature</button>
+          <button class="tab-btn" data-tab="assertion" id="tabBtnAssertion" style="display:none;">Assertion</button>
+          <button class="tab-btn" data-tab="raw" id="tabBtnRaw" style="display:none;">Raw XML</button>
+        </div>
+        <div class="placeholder" id="resultsPlaceholder">Paste a SAML Response on the left and click Validate to see the parsed result here.</div>
+        <div class="tab-panel" data-tab="overview" id="tabPanelOverview"></div>
+        <div class="tab-panel" data-tab="signature" id="tabPanelSignature"></div>
+        <div class="tab-panel" data-tab="assertion" id="tabPanelAssertion"></div>
+        <div class="tab-panel" data-tab="raw" id="tabPanelRaw"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/static/saml.js"></script>
+`, 'saml');
 }
 
 function badge(ok, textOk = 'OK', textBad = 'Failed') {
@@ -647,6 +860,29 @@ app.post('/discover', async (req, res) => {
     res.json({ url, status: r.status, statusText: r.statusText, body: json ?? text });
   } catch (e) {
     res.status(502).json({ url, error: e.message });
+  }
+});
+
+app.get('/saml', (req, res) => res.send(renderSamlHome()));
+
+app.post('/saml/verify', (req, res) => {
+  const { samlResponse, cert, audience, recipient } = req.body || {};
+  if (!samlResponse || !samlResponse.trim()) {
+    return res.status(400).json({ error: 'SAMLResponse is required.' });
+  }
+  if (!cert || !cert.trim()) {
+    return res.status(400).json({ error: 'An IdP signing certificate (PEM) is required to verify the signature.' });
+  }
+  try {
+    const result = parseAndValidateSaml({
+      raw: samlResponse,
+      cert,
+      expectedAudience: audience?.trim() || null,
+      expectedRecipient: recipient?.trim() || null,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 

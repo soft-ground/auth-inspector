@@ -4,22 +4,32 @@ A lightweight tool for running authentication protocols **as a client** against 
 IdP (Keycloak, etc.) and seeing exactly what's exchanged at every step —
 request/response params, headers, and bodies.
 
-Only **OIDC (Authorization Code + PKCE)** is implemented so far. **SAML** has a
-placeholder tab in the UI ("SAML (coming soon)") — it needs a fundamentally
-different implementation (XML signing, SP metadata, etc.) and will be added
-once there's a SAML client to test against.
+**OIDC (Authorization Code + PKCE)** runs the full client flow end to end.
+**SAML** is a Response *validator*, not a full SP flow — see below.
 
 ## Features
 
-- **Client authentication (Authorization) On/Off**, with a **Body vs. Header**
-  delivery-method switch for the client secret.
-- **PKCE On/Off** (S256/plain).
-- Full visibility into Step 1 (authorization request) → Step 2 (callback
-  response) → Step 3 (token exchange request) → Step 4 (token response) →
-  Step 5/6 (**ID/Access Token decode + JWKS signature verification +
-  audience/nonce checks**), all on one report page.
-- A single Node/Express process with two dependencies (`express`, `jose`).
-  No build step — `npm start` and you're running.
+- **OIDC**
+  - **Client authentication (Authorization) On/Off**, with a **Body vs.
+    Header** delivery-method switch for the client secret.
+  - **PKCE On/Off** (S256/plain).
+  - Full visibility into Step 1 (authorization request) → Step 2 (callback
+    response) → Step 3 (token exchange request) → Step 4 (token response) →
+    Step 5/6 (**ID/Access Token decode + JWKS signature verification +
+    audience/nonce checks**), all on one report page.
+- **SAML**
+  - Paste a SAML Response (raw XML or base64, e.g. copied from the
+    `SAMLResponse` POST field) and validate it: **XML-DSig signature**
+    verification against an IdP certificate, **Conditions** time window
+    (`NotBefore`/`NotOnOrAfter`), **SubjectConfirmationData** expiry,
+    optional **Audience** / **Recipient** checks, and a full parse of the
+    assertion (Subject, AuthnStatement, Attributes).
+  - This app does **not** act as a real Service Provider here — no
+    `AuthnRequest` is generated and there's no ACS endpoint. It's a
+    standalone validator for a response you already have.
+- A single Node/Express process with a handful of small dependencies
+  (`express`, `jose`, `xml-crypto`, `@xmldom/xmldom`, `xpath`). No build
+  step — `npm start` and you're running.
 
 ## How it works
 
@@ -95,7 +105,12 @@ http://localhost:5555/callback
   client secret here.**
 - Runs are kept **in memory only**, with no database. Restarting the server
   clears history — a deliberate trade-off for staying lightweight.
-- **OIDC only, for now.** SAML is a placeholder tab and not implemented.
+- **SAML is a validator, not a full SP.** It doesn't generate `AuthnRequest`s
+  or expose an ACS endpoint — it only inspects a Response you paste in.
+  Building a real SP flow (SP metadata, XML signing, ACS handling) is a
+  larger, separate piece of work.
+- The SAML validator doesn't handle **encrypted assertions**
+  (`<EncryptedAssertion>`) — only plain, signed (or unsigned) assertions.
 
 ## License
 
