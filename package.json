@@ -2,6 +2,7 @@
   "name": "auth-inspector",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Run OIDC (and eventually SAML) authentication flows as a client against any IdP, and inspect every request/response along the way.",
   "type": "module",
   "engines": { "node": ">=18" },
