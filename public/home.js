@@ -123,13 +123,18 @@ $('startBtn').addEventListener('click', async () => {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    alert('Failed to create request: ' + (await res.text()));
+    const err = await res.json().catch(() => null);
+    alert('Failed to create request: ' + (err?.error || res.statusText));
     return;
   }
   const data = await res.json();
   lastAuthUrl = data.authUrl;
 
   const notes = [];
+  notes.push(`Endpoints come from the IdP's discovery document (<code>${escapeHtml(data.endpoints.discoveryUrl)}</code>); the authorization endpoint used is <code>${escapeHtml(data.endpoints.authorization_endpoint)}</code>.`);
+  if (data.endpoints.issuerMismatch) {
+    notes.push(`Heads-up: the discovery document's <code>issuer</code> is <code>${escapeHtml(data.endpoints.issuer)}</code>, which differs from what you typed. Token <code>iss</code> checks use the discovery value.`);
+  }
   if (payload.authOn) {
     notes.push('Client authentication is On, but the secret is <b>never included in this authorization request (front-channel)</b>. It is only sent in Step 3 (token exchange).');
   }

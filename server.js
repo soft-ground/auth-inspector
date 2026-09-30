@@ -87,19 +87,34 @@ function normIssuer(issuer) {
   return issuer.replace(/\/+$/, '');
 }
 
-// JWKS cache, keyed by issuer
-const jwksCache = new Map();
-function getJwks(issuer) {
-  const key = normIssuer(issuer);
-  if (!jwksCache.has(key)) {
-    jwksCache.set(key, createRemoteJWKSet(new URL(`${key}/protocol/openid-connect/certs`)));
-  }
-  return jwksCache.get(key);
+function withQuery(url, params) {
+  return url + (url.includes('?') ? '&' : '?') + new URLSearchParams(params).toString();
 }
-async function verifySignature(token, issuer) {
+
+// OIDC Discovery: {issuer}/.well-known/openid-configuration is the standard
+// location, and every endpoint this app calls is read from that document.
+async function fetchOidcDiscovery(issuer) {
+  const url = `${normIssuer(issuer)}/.well-known/openid-configuration`;
+  const r = await fetch(url);
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { json = null; }
+  return { url, status: r.status, statusText: r.statusText, ok: r.ok, json, text };
+}
+
+// JWKS cache, keyed by the jwks_uri the IdP advertises
+const jwksCache = new Map();
+function getJwks(jwksUri) {
+  if (!jwksCache.has(jwksUri)) {
+    jwksCache.set(jwksUri, createRemoteJWKSet(new URL(jwksUri)));
+  }
+  return jwksCache.get(jwksUri);
+}
+async function verifySignature(token, endpoints) {
   try {
-    const JWKS = getJwks(issuer);
-    const { payload, protectedHeader } = await jwtVerify(token, JWKS, { issuer: normIssuer(issuer) });
+    if (!endpoints.jwks_uri) throw new Error('The IdP\'s discovery document has no jwks_uri.');
+    const JWKS = getJwks(endpoints.jwks_uri);
+    const { payload, protectedHeader } = await jwtVerify(token, JWKS, { issuer: endpoints.issuer });
     return { verified: true, header: protectedHeader, payload };
   } catch (e) {
     return { verified: false, error: e.message };
@@ -111,14 +126,14 @@ function audienceMatches(payload, clientId) {
   const inAud = Array.isArray(aud) ? aud.includes(clientId) : aud === clientId;
   return inAud || payload.azp === clientId;
 }
-async function buildTokenInfo(token, issuer, clientId, expectedNonce) {
+async function buildTokenInfo(token, endpoints, clientId, expectedNonce) {
   let raw = null;
   try {
     raw = decodeJwtRaw(token);
   } catch {
     return { opaque: true };
   }
-  const verify = await verifySignature(token, issuer);
+  const verify = await verifySignature(token, endpoints);
   return {
     opaque: false,
     header: raw.header,
@@ -822,11 +837,12 @@ const STATUS_BADGE = {
 };
 
 function oidcEndSession(run) {
+  const base = run.endpoints.end_session_endpoint;
+  if (!base) return null;
   const idToken = run.step4?.body?.id_token;
   const params = { client_id: run.config.clientId };
   if (idToken) params.id_token_hint = idToken;
-  const base = `${normIssuer(run.config.issuer)}/protocol/openid-connect/logout`;
-  return { base, params, url: base + '?' + new URLSearchParams(params).toString() };
+  return { base, params, url: withQuery(base, params) };
 }
 
 function buildOidcLogoutEntry(run) {
@@ -857,11 +873,12 @@ function buildOidcLogoutEntry(run) {
         session stays alive, so other apps — and this one, on the next login — are not signed out.</div>
       ${revokeHtml}
       <div class="kv-title" style="margin-top:22px;">SSO logout — end the IdP session (RP-initiated)</div>
-      <div class="note" style="margin-bottom:8px;">A browser redirect to the IdP's end-session endpoint. It ends the IdP's SSO session, which signs
+      ${end ? `<div class="note" style="margin-bottom:8px;">A browser redirect to the IdP's end-session endpoint (<code>end_session_endpoint</code> from discovery). It ends the IdP's SSO session, which signs
         out <b>every</b> app that shares it. ${end.params.id_token_hint ? '' : 'No id_token was issued, so <code>id_token_hint</code> is omitted and the IdP may ask for confirmation.'}</div>
       <div class="sub">GET <code>${escapeHtml(end.base)}</code></div>
       ${kvTable(end.params, ['id_token_hint'])}
-      <p><a href="${escapeHtml(end.url)}" target="_blank" rel="noopener">Open SSO logout in new tab ↗</a></p>`,
+      <p><a href="${escapeHtml(end.url)}" target="_blank" rel="noopener">Open SSO logout in new tab ↗</a></p>` :
+        `<div class="note">The IdP's discovery document does not advertise an <code>end_session_endpoint</code>, so SSO logout is not available.</div>`}`,
   };
 }
 
@@ -872,7 +889,9 @@ function oidcLogoutCard(run) {
     <form method="POST" action="/report/${escapeHtml(run.id)}/revoke">
       <button class="btn block secondary" type="submit">Single logout — revoke tokens</button>
     </form>
-    <a class="btn block secondary" style="margin-top:10px;" href="${escapeHtml(end.url)}" target="_blank" rel="noopener">SSO logout — end IdP session ↗</a>
+    ${end
+      ? `<a class="btn block secondary" style="margin-top:10px;" href="${escapeHtml(end.url)}" target="_blank" rel="noopener">SSO logout — end IdP session ↗</a>`
+      : `<p class="note" style="margin-top:10px;">SSO logout unavailable: no <code>end_session_endpoint</code> in the discovery document.</p>`}
     <details class="hint-details">
       <summary>What's the difference?</summary>
       <p><b>Single</b> revokes only this client's tokens; the IdP session remains. <b>SSO</b> ends the IdP session itself,
@@ -1190,12 +1209,36 @@ app.get('/', (req, res) => res.send(renderHome()));
 
 app.get('/runs', (req, res) => res.send(renderRuns()));
 
-app.post('/start', (req, res) => {
+app.post('/start', async (req, res) => {
   const { issuer, clientId, clientSecret, redirectUri, scope, authOn, authMethod, pkceOn, pkceMethod } = req.body || {};
 
   if (!issuer || !clientId || !redirectUri) {
     return res.status(400).json({ error: 'issuer, clientId, and redirectUri are required.' });
   }
+
+  let disc;
+  try {
+    disc = await fetchOidcDiscovery(issuer);
+  } catch (e) {
+    return res.status(502).json({ error: `Could not reach the discovery endpoint (${normIssuer(issuer)}/.well-known/openid-configuration): ${e.message}` });
+  }
+  if (!disc.ok || !disc.json) {
+    return res.status(502).json({ error: `Discovery failed: GET ${disc.url} returned HTTP ${disc.status}${disc.json ? '' : ' (not JSON)'}. Check the Issuer.` });
+  }
+  const d = disc.json;
+  if (!d.authorization_endpoint || !d.token_endpoint) {
+    return res.status(502).json({ error: 'The discovery document has no authorization_endpoint / token_endpoint.' });
+  }
+  const endpoints = {
+    discoveryUrl: disc.url,
+    issuer: d.issuer || normIssuer(issuer),
+    issuerMismatch: !!d.issuer && d.issuer !== normIssuer(issuer),
+    authorization_endpoint: d.authorization_endpoint,
+    token_endpoint: d.token_endpoint,
+    jwks_uri: d.jwks_uri || null,
+    end_session_endpoint: d.end_session_endpoint || null,
+    revocation_endpoint: d.revocation_endpoint || null,
+  };
 
   const state = crypto.randomUUID();
   const nonce = crypto.randomUUID();
@@ -1214,7 +1257,7 @@ app.post('/start', (req, res) => {
     params.code_challenge_method = pkce.method;
   }
 
-  const authUrl = `${normIssuer(issuer)}/protocol/openid-connect/auth?` + new URLSearchParams(params).toString();
+  const authUrl = withQuery(endpoints.authorization_endpoint, params);
 
   runs.set(state, {
     id: state,
@@ -1226,13 +1269,14 @@ app.post('/start', (req, res) => {
       pkceOn: !!pkceOn, pkceMethod: pkce?.method || null,
     },
     nonce,
+    endpoints,
     pkceVerifier: pkce?.verifier || null,
     step1: { url: authUrl, params },
     step2: null, step3: null, step4: null, step5: null,
     status: 'pending',
   });
 
-  res.json({ state, authUrl, params });
+  res.json({ state, authUrl, params, endpoints: { discoveryUrl: endpoints.discoveryUrl, authorization_endpoint: endpoints.authorization_endpoint, issuer: endpoints.issuer, issuerMismatch: endpoints.issuerMismatch } });
 });
 
 // Performs Step 3 (token request) + Step 4 (token response) + Step 5/6
@@ -1241,7 +1285,7 @@ app.post('/start', (req, res) => {
 // tokens" button instead of running automatically.
 async function performTokenExchange(run) {
   const code = run.step2.query.code;
-  const tokenUrl = `${normIssuer(run.config.issuer)}/protocol/openid-connect/token`;
+  const tokenUrl = run.endpoints.token_endpoint;
   const bodyParams = {
     grant_type: 'authorization_code',
     code: String(code),
@@ -1279,10 +1323,10 @@ async function performTokenExchange(run) {
 
   const step5 = {};
   if (tokenJson.id_token) {
-    step5.idToken = await buildTokenInfo(tokenJson.id_token, run.config.issuer, run.config.clientId, run.nonce);
+    step5.idToken = await buildTokenInfo(tokenJson.id_token, run.endpoints, run.config.clientId, run.nonce);
   }
   if (tokenJson.access_token) {
-    step5.accessToken = await buildTokenInfo(tokenJson.access_token, run.config.issuer, run.config.clientId, null);
+    step5.accessToken = await buildTokenInfo(tokenJson.access_token, run.endpoints, run.config.clientId, null);
   }
   run.step5 = step5;
   run.status = 'success';
@@ -1296,15 +1340,11 @@ app.post('/discover', async (req, res) => {
   const { issuer } = req.body || {};
   if (!issuer) return res.status(400).json({ error: 'issuer is required.' });
 
-  const url = `${normIssuer(issuer)}/.well-known/openid-configuration`;
   try {
-    const r = await fetch(url);
-    const text = await r.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch { json = null; }
-    res.json({ url, status: r.status, statusText: r.statusText, body: json ?? text });
+    const d = await fetchOidcDiscovery(issuer);
+    res.json({ url: d.url, status: d.status, statusText: d.statusText, body: d.json ?? d.text });
   } catch (e) {
-    res.status(502).json({ url, error: e.message });
+    res.status(502).json({ url: `${normIssuer(issuer)}/.well-known/openid-configuration`, error: e.message });
   }
 });
 
@@ -1472,7 +1512,11 @@ app.post('/report/:state/revoke', async (req, res) => {
     return res.redirect(`/report/${run.id}`);
   }
 
-  const url = `${normIssuer(run.config.issuer)}/protocol/openid-connect/revoke`;
+  const url = run.endpoints.revocation_endpoint;
+  if (!url) {
+    run.logout = { ...(run.logout || {}), revoke: { error: 'The IdP\'s discovery document does not advertise a revocation_endpoint.' } };
+    return res.redirect(`/report/${run.id}`);
+  }
   const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
   const body = { token, token_type_hint: tokens.refresh_token ? 'refresh_token' : 'access_token' };
   applyClientAuth(run.config, headers, body);
