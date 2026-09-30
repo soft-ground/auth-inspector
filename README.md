@@ -4,8 +4,8 @@ A lightweight tool for running authentication protocols **as a client** against 
 IdP (Keycloak, etc.) and seeing exactly what's exchanged at every step —
 request/response params, headers, and bodies.
 
-**OIDC (Authorization Code + PKCE)** runs the full client flow end to end.
-**SAML** is a Response *validator*, not a full SP flow — see below.
+Both **OIDC (Authorization Code + PKCE)** and **SAML 2.0 (SP-initiated, Redirect
+request / POST response)** run as a full client/SP flow, with every step visible.
 
 ## Features
 
@@ -17,16 +17,20 @@ request/response params, headers, and bodies.
     response) → Step 3 (token exchange request) → Step 4 (token response) →
     Step 5/6 (**ID/Access Token decode + JWKS signature verification +
     audience/nonce checks**), all on one report page.
-- **SAML**
-  - Paste a SAML Response (raw XML or base64, e.g. copied from the
-    `SAMLResponse` POST field) and validate it: **XML-DSig signature**
-    verification against an IdP certificate, **Conditions** time window
-    (`NotBefore`/`NotOnOrAfter`), **SubjectConfirmationData** expiry,
-    optional **Audience** / **Recipient** checks, and a full parse of the
-    assertion (Subject, AuthnStatement, Attributes).
-  - This app does **not** act as a real Service Provider here — no
-    `AuthnRequest` is generated and there's no ACS endpoint. It's a
-    standalone validator for a response you already have.
+- **SAML** (this app acts as the Service Provider)
+  - Enter the IdP SSO URL + signing certificate (or fetch both from the IdP
+    metadata URL), plus SP Entity ID, ACS URL, NameID format, and
+    ForceAuthn.
+  - **Sign AuthnRequest On/Off** — when On, the redirect URL carries
+    `SigAlg`/`Signature` (RSA-SHA256); the private key stays server-side.
+  - Step 1 shows the `AuthnRequest` XML and how it becomes the
+    `SAMLRequest` parameter (raw DEFLATE → base64 → URL-encode). Nothing is
+    sent until you click **Send request**.
+  - Step 2 is the IdP's HTTP-POST to `/saml/acs`; Step 3 validates it
+    (**XML-DSig signature**, Status, **Conditions** window,
+    **SubjectConfirmationData** expiry, **Audience** = SP Entity ID,
+    **Recipient** = ACS URL, **InResponseTo** = the request ID); Step 4 shows
+    the parsed assertion (Subject, AuthnStatement, Attributes).
 - A single Node/Express process with a handful of small dependencies
   (`express`, `jose`, `xml-crypto`, `@xmldom/xmldom`, `xpath`). No build
   step — `npm start` and you're running.
@@ -105,11 +109,10 @@ http://localhost:5555/callback
   client secret here.**
 - Runs are kept **in memory only**, with no database. Restarting the server
   clears history — a deliberate trade-off for staying lightweight.
-- **SAML is a validator, not a full SP.** It doesn't generate `AuthnRequest`s
-  or expose an ACS endpoint — it only inspects a Response you paste in.
-  Building a real SP flow (SP metadata, XML signing, ACS handling) is a
-  larger, separate piece of work.
-- The SAML validator doesn't handle **encrypted assertions**
+- SAML uses the **HTTP-Redirect** binding for the request and **HTTP-POST**
+  for the response. SP metadata generation and Single Logout are not
+  implemented.
+- SAML validation doesn't handle **encrypted assertions**
   (`<EncryptedAssertion>`) — only plain, signed (or unsigned) assertions.
 
 ## License

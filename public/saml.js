@@ -6,164 +6,150 @@ function escapeHtml(str) {
   }[c]));
 }
 
-function badge(ok, textOk = 'OK', textBad = 'Failed') {
-  if (ok === null || ok === undefined) return `<span class="badge muted">N/A</span>`;
-  return `<span class="badge ${ok ? 'ok' : 'bad'}">${escapeHtml(ok ? textOk : textBad)}</span>`;
+function setupToggle(groupId, onChange) {
+  const group = $(groupId);
+  let val = group.querySelector('button.active')?.dataset.val;
+  group.querySelectorAll('button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      group.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      val = btn.dataset.val;
+      onChange?.(val);
+    });
+  });
+  return { get: () => val };
 }
 
-function kvTable(rows) {
-  const trs = rows
-    .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td><code>${escapeHtml(String(v))}</code></td></tr>`)
-    .join('');
-  return `<table class="kv">${trs}</table>`;
-}
-
-// Shows a result tab (revealing its button if hidden) and fills its panel —
-// mirrors showResult() in home.js / the tab-switching wired up in page().
-function showTab(tabKey, html) {
+function showResult(tabKey, html) {
   $('resultsPlaceholder').style.display = 'none';
   const cap = tabKey[0].toUpperCase() + tabKey.slice(1);
   const btn = $('tabBtn' + cap);
   if (btn) btn.style.display = '';
   const panel = $('tabPanel' + cap);
   if (panel) panel.innerHTML = html;
-}
-
-function activateTab(tabKey) {
   document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tabKey));
   document.querySelectorAll('.tab-group .tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.tab === tabKey));
 }
 
-// ── Remember cert/audience/recipient locally for convenience ──────────────
-const FIELDS = ['cert', 'audience', 'recipient'];
+function renderKv(obj) {
+  const rows = Object.entries(obj)
+    .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td><code>${escapeHtml(String(v))}</code></td></tr>`)
+    .join('');
+  return `<table class="kv">${rows}</table>`;
+}
+
+// ── Remember field values locally for convenience (private key is never stored) ──
+const FIELDS = ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'acsUrl', 'nameIdFormat'];
 FIELDS.forEach((id) => {
   const saved = localStorage.getItem('auth-inspector:saml:' + id);
   if (saved) $(id).value = saved;
   $(id).addEventListener('input', () => localStorage.setItem('auth-inspector:saml:' + id, $(id).value));
 });
+if (!$('acsUrl').value) $('acsUrl').value = location.origin + '/saml/acs';
 
-function renderOverview(data) {
-  const parts = [];
+const forceAuthnToggle = setupToggle('forceAuthnToggle');
+const signToggle = setupToggle('signToggle', (v) => {
+  $('signOnFields').style.display = v === 'on' ? 'block' : 'none';
+});
 
-  parts.push(`<div class="badges" style="margin-bottom:14px;">
-    ${badge(data.anySignedAndValid, 'Signature valid', data.signatures.length ? 'Signature invalid' : 'Not signed')}
-    ${data.status ? badge(data.status.code === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'Status: Success', 'Status: ' + (data.status.code || 'unknown')) : ''}
-    ${data.assertion ? badge(data.assertion.timeValid, 'Within Conditions window', 'Expired / not yet valid') : ''}
-    ${data.assertion ? badge(data.assertion.confirmationValid, 'Confirmation not expired', 'Confirmation expired') : ''}
-    ${data.assertion?.audienceOk !== null && data.assertion ? badge(data.assertion.audienceOk, 'Audience matches', 'Audience mismatch') : ''}
-    ${data.assertion?.recipientOk !== null && data.assertion ? badge(data.assertion.recipientOk, 'Recipient matches', 'Recipient mismatch') : ''}
-  </div>`);
-
-  parts.push(kvTable([
-    ['Root element', data.isBareAssertion ? 'Assertion (no envelope)' : 'Response'],
-    ['Response status', data.status?.code],
-    ['Response Issuer', data.responseIssuer],
-    ['Assertion Issuer', data.assertion?.issuer],
-    ['NameID', data.assertion?.subject?.nameId],
-    ['NameID Format', data.assertion?.subject?.nameIdFormat],
-    ['Conditions NotBefore', data.assertion?.conditions?.notBefore],
-    ['Conditions NotOnOrAfter', data.assertion?.conditions?.notOnOrAfter],
-    ['Audience(s)', data.assertion?.conditions?.audiences?.join(', ')],
-  ]));
-
-  if (!data.signatures.length) {
-    parts.push(`<div class="note" style="margin-top:10px;">No &lt;Signature&gt; element found on the Response or Assertion — this response is unsigned (or was signed some other way, e.g. TLS-only transport, which this tool doesn't check).</div>`);
-  }
-
-  return parts.join('');
-}
-
-function renderSignature(data) {
-  if (!data.signatures.length) {
-    return `<div class="note">No &lt;Signature&gt; element found on the Response or Assertion.</div>`;
-  }
-  return data.signatures.map((s) => `
-    <div class="kv-title">${escapeHtml(s.scope)} signature</div>
-    <div class="badges">${badge(s.verified, 'Verified', 'Invalid')}</div>
-    ${!s.verified && s.error ? `<div class="note" style="margin-top:8px;">${escapeHtml(s.error)}</div>` : ''}
-  `).join('<hr style="border:none; border-top:1px solid var(--border); margin:16px 0;">');
-}
-
-function renderAttributesTable(attrs) {
-  if (!attrs || !attrs.length) return '<div class="note">No attributes in AttributeStatement.</div>';
-  const rows = attrs.map((a) => `
-    <tr>
-      <td>${escapeHtml(a.friendlyName ? `${a.name} (${a.friendlyName})` : a.name)}</td>
-      <td>${a.values.map((v) => `<code>${escapeHtml(v)}</code>`).join('<br>') || '<span class="note">—</span>'}</td>
-    </tr>`).join('');
-  return `<table class="kv">${rows}</table>`;
-}
-
-function renderAssertion(data) {
-  const a = data.assertion;
-  if (!a) return `<div class="note">No &lt;Assertion&gt; found in this response.</div>`;
-
-  return `
-    <div class="kv-title">Subject</div>
-    ${kvTable([
-      ['NameID', a.subject.nameId],
-      ['NameID Format', a.subject.nameIdFormat],
-      ['SubjectConfirmationData Recipient', a.subject.recipient],
-      ['SubjectConfirmationData NotOnOrAfter', a.subject.notOnOrAfter],
-      ['InResponseTo', a.subject.inResponseTo],
-    ])}
-
-    <div class="kv-title">Conditions</div>
-    ${kvTable([
-      ['NotBefore', a.conditions.notBefore],
-      ['NotOnOrAfter', a.conditions.notOnOrAfter],
-      ['Audience(s)', a.conditions.audiences.join(', ')],
-    ])}
-
-    ${a.authn ? `<div class="kv-title">AuthnStatement</div>
-    ${kvTable([
-      ['AuthnInstant', a.authn.authnInstant],
-      ['SessionIndex', a.authn.sessionIndex],
-      ['AuthnContextClassRef', a.authn.contextClassRef],
-    ])}` : ''}
-
-    <div class="kv-title">Attributes</div>
-    ${renderAttributesTable(a.attributes)}
-  `;
-}
-
-$('validateBtn').addEventListener('click', async () => {
-  const samlResponse = $('samlInput').value.trim();
-  const cert = $('cert').value.trim();
-  if (!samlResponse) {
-    alert('Paste a SAML Response first.');
+// ── Optional: fetch IdP metadata and prefill SSO URL / cert ──────────────────
+$('discoverBtn').addEventListener('click', async () => {
+  const metadataUrl = $('metadataUrl').value.trim();
+  if (!metadataUrl) {
+    alert('IdP metadata URL is required.');
     return;
   }
-  if (!cert) {
-    alert('Paste the IdP signing certificate (PEM) first.');
-    return;
-  }
+  showResult('metadata', '<div class="note">Fetching…</div>');
 
-  showTab('overview', '<div class="note">Validating…</div>');
-  activateTab('overview');
-
-  const res = await fetch('/saml/verify', {
+  const res = await fetch('/saml/discover', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      samlResponse,
-      cert,
-      audience: $('audience').value.trim(),
-      recipient: $('recipient').value.trim(),
-    }),
+    body: JSON.stringify({ metadataUrl }),
   });
   const data = await res.json();
 
-  if (!res.ok) {
-    showTab('overview', `<div class="note">${escapeHtml(data.error || 'Validation failed.')}</div>`);
-    activateTab('overview');
+  if (data.error) {
+    showResult('metadata', `<div class="note">Request to <code>${escapeHtml(data.url || metadataUrl)}</code> failed: ${escapeHtml(data.error)}</div>`);
     return;
   }
 
-  showTab('overview', renderOverview(data));
-  showTab('signature', renderSignature(data));
-  showTab('assertion', renderAssertion(data));
-  showTab('raw', `<pre>${escapeHtml(data.xml)}</pre>`);
-  activateTab('overview');
+  const ok = data.status >= 200 && data.status < 300;
+  let filled = '';
+  if (data.parsed) {
+    if (data.parsed.ssoUrl) { $('ssoUrl').value = data.parsed.ssoUrl; $('ssoUrl').dispatchEvent(new Event('input')); }
+    if (data.parsed.cert) { $('cert').value = data.parsed.cert; $('cert').dispatchEvent(new Event('input')); }
+    filled = `<div class="note" style="margin-bottom:10px;">Filled in from metadata: IdP SSO URL${data.parsed.cert ? ' and signing certificate' : ''}.
+      IdP entityID: <code>${escapeHtml(data.parsed.entityId || '—')}</code></div>`;
+  } else if (data.parseError) {
+    filled = `<div class="note" style="margin-bottom:10px;">Could not parse metadata: ${escapeHtml(data.parseError)}</div>`;
+  }
+
+  showResult('metadata', `
+    <div class="sub">GET <code>${escapeHtml(data.url)}</code> — HTTP ${data.status} ${escapeHtml(data.statusText || '')}
+      <span class="badge ${ok ? 'ok' : 'bad'}" style="margin-left:6px;">${ok ? 'Reachable' : 'Failed'}</span>
+    </div>
+    ${filled}
+    <pre>${escapeHtml(data.xml)}</pre>
+  `);
+});
+
+// ── Step 1: build the SAMLRequest ────────────────────────────────────────────
+let lastUrl = null;
+
+$('startBtn').addEventListener('click', async () => {
+  const payload = {
+    ssoUrl: $('ssoUrl').value.trim(),
+    cert: $('cert').value.trim(),
+    spEntityId: $('spEntityId').value.trim(),
+    acsUrl: $('acsUrl').value.trim(),
+    nameIdFormat: $('nameIdFormat').value,
+    forceAuthn: forceAuthnToggle.get() === 'on',
+    signOn: signToggle.get() === 'on',
+    spPrivateKey: $('spPrivateKey').value.trim(),
+  };
+  if (!payload.ssoUrl || !payload.spEntityId || !payload.acsUrl) {
+    alert('IdP SSO URL, SP Entity ID, and ACS URL are required.');
+    return;
+  }
+  if (!payload.cert) {
+    if (!confirm('No IdP certificate entered — the response signature cannot be verified. Continue anyway?')) return;
+  }
+
+  const res = await fetch('/saml/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert('Failed to create request: ' + (data.error || res.statusText));
+    return;
+  }
+  lastUrl = data.url;
+
+  const notes = [
+    'The AuthnRequest XML below is <b>raw DEFLATE-compressed, base64-encoded, then URL-encoded</b> into the <code>SAMLRequest</code> query parameter (HTTP-Redirect binding).',
+    `<code>RelayState</code> carries this test's id, so the IdP's POST to the ACS URL can be matched back to it. The request <code>ID</code> is <code>${escapeHtml(data.requestId)}</code> — the response's <code>InResponseTo</code> should echo it.`,
+  ];
+  notes.push(data.signed
+    ? 'Signing is On → <code>SigAlg</code> and <code>Signature</code> are appended. The private key stays on the server.'
+    : 'Signing is Off → no <code>Signature</code> is sent.');
+
+  showResult('step1', `
+    <div class="note">${notes.join('<br>')}</div>
+    <div class="kv-title">AuthnRequest XML</div>
+    <pre style="flex:none; min-height:0;">${escapeHtml(data.xml)}</pre>
+    <div class="kv-title">Query parameters</div>
+    ${renderKv(data.params)}
+    <div class="sub" style="margin-top:8px; word-break:break-all;">
+      Full URL: <code>${escapeHtml(data.url)}</code>
+    </div>
+  `);
+  $('goBtn').style.display = '';
+});
+
+// New tab: the IdP login page can't be framed here, and the IdP's POST lands
+// on our own /saml/acs -> /saml/report/:id in that tab.
+$('goBtn').addEventListener('click', () => {
+  if (lastUrl) window.open(lastUrl, '_blank', 'noopener');
 });
