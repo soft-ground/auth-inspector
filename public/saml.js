@@ -47,6 +47,33 @@ FIELDS.forEach((id) => {
 });
 if (!$('acsUrl').value) $('acsUrl').value = location.origin + '/saml/acs';
 
+// Fill a PEM textarea from a picked or dropped file. The file is read in the
+// browser only; nothing is uploaded until "Generate SAMLRequest".
+function bindPemFile(textareaId, fileInputId) {
+  const ta = $(textareaId);
+  async function load(file) {
+    if (!file) return;
+    if (file.size > 64 * 1024) { alert('That file is too large to be a PEM key/certificate.'); return; }
+    const text = await file.text();
+    if (!text.includes('-----BEGIN')) {
+      alert('Expected a PEM text file (starting with -----BEGIN ...). Binary keystores (.p12/.jks/.der) must be converted to PEM first.');
+      return;
+    }
+    ta.value = text.trim();
+    ta.dispatchEvent(new Event('input'));
+  }
+  $(fileInputId).addEventListener('change', (e) => { load(e.target.files[0]); e.target.value = ''; });
+  ta.addEventListener('dragover', (e) => { e.preventDefault(); ta.classList.add('drag-over'); });
+  ta.addEventListener('dragleave', () => ta.classList.remove('drag-over'));
+  ta.addEventListener('drop', (e) => {
+    e.preventDefault();
+    ta.classList.remove('drag-over');
+    load(e.dataTransfer.files[0]);
+  });
+}
+bindPemFile('cert', 'certFile');
+bindPemFile('spPrivateKey', 'spPrivateKeyFile');
+
 const forceAuthnToggle = setupToggle('forceAuthnToggle');
 const signToggle = setupToggle('signToggle', (v) => {
   $('signOnFields').style.display = v === 'on' ? 'block' : 'none';
