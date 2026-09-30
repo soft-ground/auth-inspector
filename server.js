@@ -531,7 +531,9 @@ document.querySelectorAll('.layout-left.pinned').forEach((left) => {
   function fit() {
     if (matchMedia('(max-width:900px)').matches) { left.style.maxHeight = ''; return; }
     const top = Math.max(left.getBoundingClientRect().top, 20);
-    left.style.maxHeight = Math.max(360, window.innerHeight - top - 16) + 'px';
+    const bar = document.querySelector('.action-bar');
+    const barH = bar ? bar.offsetHeight + 14 : 0;
+    left.style.maxHeight = Math.max(320, window.innerHeight - top - barH - 16) + 'px';
   }
   fit();
   addEventListener('resize', fit);
@@ -624,11 +626,6 @@ function renderHome() {
       </div>
 
       </div>
-      <div class="left-actions">
-        <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
-        <button class="btn block go" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
-        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
-      </div>
     </div>
 
     <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
@@ -644,6 +641,11 @@ function renderHome() {
         <div class="tab-panel" data-tab="step1" id="tabPanelStep1"></div>
       </div>
     </div>
+  </div>
+  <div class="action-bar">
+    <button class="btn" id="startBtn">Generate authentication request →</button>
+    <button class="btn go" id="goBtn" disabled>Send request →</button>
+    <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
   </div>
 </div>
 <script src="/static/home.js"></script>
@@ -729,11 +731,6 @@ function renderSamlHome() {
       </div>
 
       </div>
-      <div class="left-actions">
-        <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate SAMLRequest →</button>
-        <button class="btn block go" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
-        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
-      </div>
     </div>
 
     <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
@@ -749,6 +746,11 @@ function renderSamlHome() {
         <div class="tab-panel" data-tab="step1" id="tabPanelStep1"></div>
       </div>
     </div>
+  </div>
+  <div class="action-bar">
+    <button class="btn" id="startBtn">Generate SAMLRequest →</button>
+    <button class="btn go" id="goBtn" disabled>Send request →</button>
+    <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
   </div>
 </div>
 <script src="/static/saml.js"></script>

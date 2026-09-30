@@ -174,7 +174,7 @@ $('startBtn').addEventListener('click', async () => {
       Full URL: <code>${escapeHtml(data.url)}</code>
     </div>
   `);
-  $('goBtn').style.display = '';
+  $('goBtn').disabled = false;
 });
 
 // New tab: the IdP login page can't be framed here, and the IdP's POST lands
@@ -195,6 +195,6 @@ $('resetBtn').addEventListener('click', () => {
   document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => { b.style.display = 'none'; b.classList.remove('active'); });
   document.querySelectorAll('.tab-group .tab-panel').forEach((p) => { p.innerHTML = ''; p.classList.remove('active'); });
   $('resultsPlaceholder').style.display = '';
-  $('goBtn').style.display = 'none';
+  $('goBtn').disabled = true;
   lastUrl = null;
 });
