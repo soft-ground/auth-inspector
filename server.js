@@ -292,6 +292,51 @@ function buildAuthnRequestXml({ id, issueInstant, destination, acsUrl, spEntityI
     `</samlp:AuthnRequest>`;
 }
 
+function buildLogoutRequestXml({ id, issueInstant, destination, spEntityId, nameId, nameIdFormat, sessionIndex }) {
+  return `<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"` +
+    ` ID="${xmlEscape(id)}" Version="2.0" IssueInstant="${issueInstant}" Destination="${xmlEscape(destination)}">` +
+    `<saml:Issuer>${xmlEscape(spEntityId)}</saml:Issuer>` +
+    `<saml:NameID${nameIdFormat ? ` Format="${xmlEscape(nameIdFormat)}"` : ''}>${xmlEscape(nameId)}</saml:NameID>` +
+    (sessionIndex ? `<samlp:SessionIndex>${xmlEscape(sessionIndex)}</samlp:SessionIndex>` : '') +
+    `</samlp:LogoutRequest>`;
+}
+
+// Redirect binding messages are DEFLATEd; POST binding ones are plain base64.
+function decodeSamlMessage(b64) {
+  const buf = Buffer.from(String(b64), 'base64');
+  try { return zlib.inflateRawSync(buf).toString('utf8'); } catch { return buf.toString('utf8'); }
+}
+
+function parseLogoutResponse(xml) {
+  const parseErrors = [];
+  const doc = new DOMParser({ onError: (level, msg) => { if (level !== 'warning') parseErrors.push(msg); } })
+    .parseFromString(xml, 'text/xml');
+  if (parseErrors.length || !doc.documentElement) throw new Error('XML parse error: ' + (parseErrors.join('; ') || 'no root element'));
+  const root = doc.documentElement;
+  return {
+    xml,
+    rootName: root.localName,
+    statusCode: xattr(xall(root, 'StatusCode')[0], 'Value'),
+    inResponseTo: xattr(root, 'InResponseTo'),
+    issuer: xtext(xchild(root, 'Issuer')),
+  };
+}
+
+// Same client-authentication choices for every back-channel call (token, revoke).
+function applyClientAuth(cfg, headers, body) {
+  if (cfg.authOn) {
+    if (cfg.authMethod === 'basic') {
+      headers['Authorization'] = 'Basic ' + Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
+      // When using Basic auth, client_id is not duplicated in the body (per spec).
+    } else {
+      body.client_id = cfg.clientId;
+      body.client_secret = cfg.clientSecret;
+    }
+  } else {
+    body.client_id = cfg.clientId; // public: client_id only, no secret
+  }
+}
+
 // Keycloak hands out keys/certs as bare base64 (no -----BEGIN----- lines), so
 // accept both PEM and bare base64 and normalize.
 function normalizePrivateKey(input) {
@@ -430,6 +475,19 @@ document.querySelectorAll('.layout').forEach((layout) => {
     localStorage.setItem('auth-inspector:leftWidth', half);
   });
 });
+
+// Pinned left column: fit it to the space left in the viewport so the action
+// buttons stay visible; the inputs scroll inside it.
+document.querySelectorAll('.layout-left.pinned').forEach((left) => {
+  function fit() {
+    if (matchMedia('(max-width:900px)').matches) { left.style.maxHeight = ''; return; }
+    const top = Math.max(left.getBoundingClientRect().top, 20);
+    left.style.maxHeight = Math.max(360, window.innerHeight - top - 16) + 'px';
+  }
+  fit();
+  addEventListener('resize', fit);
+  addEventListener('scroll', fit, { passive: true });
+});
 </script>
 </body>
 </html>`;
@@ -451,17 +509,18 @@ function renderHome() {
   </h1>
 
   <div class="layout">
-    <div class="layout-left">
+    <div class="layout-left pinned">
+      <div class="left-scroll">
       <div class="card">
         <div class="section-title"><h2>Connection</h2></div>
         <div class="field">
-          <label>Issuer <span class="hint">e.g. http://70.12.115.171:24080/realms/dev</span></label>
-          <input type="text" id="issuer" placeholder="http://localhost:24080/realms/dev">
+          <label>Issuer <span class="hint">e.g. https://idp.example.com/realms/dev</span></label>
+          <input type="text" id="issuer" placeholder="http://localhost:8080/realms/dev">
         </div>
         <button class="btn block" id="discoverBtn" type="button" style="margin-bottom:14px;">Discover →</button>
         <div class="field">
           <label>Client ID</label>
-          <input type="text" id="clientId" placeholder="knowledge-agent">
+          <input type="text" id="clientId" placeholder="my-client">
         </div>
         <div class="field">
           <label>Scope <span class="hint">must include "openid"</span></label>
@@ -515,8 +574,12 @@ function renderHome() {
         </div>
       </div>
 
-      <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
-      <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+      </div>
+      <div class="left-actions">
+        <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
+        <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
+      </div>
     </div>
 
     <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
@@ -546,17 +609,18 @@ function renderSamlHome() {
   </h1>
 
   <div class="layout">
-    <div class="layout-left">
+    <div class="layout-left pinned">
+      <div class="left-scroll">
       <div class="card">
         <div class="section-title"><h2>Identity Provider</h2></div>
         <div class="field">
-          <label>IdP metadata URL <span class="hint">optional — e.g. http://localhost:24080/realms/dev/protocol/saml/descriptor</span></label>
-          <input type="text" id="metadataUrl" placeholder="http://localhost:24080/realms/dev/protocol/saml/descriptor">
+          <label>IdP metadata URL <span class="hint">optional — e.g. https://idp.example.com/realms/dev/protocol/saml/descriptor</span></label>
+          <input type="text" id="metadataUrl" placeholder="http://localhost:8080/realms/dev/protocol/saml/descriptor">
         </div>
         <button class="btn block" id="discoverBtn" type="button" style="margin-bottom:14px;">Fetch metadata →</button>
         <div class="field">
           <label>IdP SSO URL <span class="hint">where the SAMLRequest is sent (HTTP-Redirect binding)</span></label>
-          <input type="text" id="ssoUrl" placeholder="http://localhost:24080/realms/dev/protocol/saml">
+          <input type="text" id="ssoUrl" placeholder="http://localhost:8080/realms/dev/protocol/saml">
         </div>
         <div class="field">
           <label>IdP signing certificate (PEM) <span class="hint">used to verify the Response/Assertion signature</span></label>
@@ -615,8 +679,12 @@ function renderSamlHome() {
         </div>
       </div>
 
-      <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate SAMLRequest →</button>
-      <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+      </div>
+      <div class="left-actions">
+        <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate SAMLRequest →</button>
+        <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
+      </div>
     </div>
 
     <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
@@ -753,10 +821,71 @@ const STATUS_BADGE = {
   no_response: () => badge(false, '', 'No SAMLResponse'),
 };
 
+function oidcEndSession(run) {
+  const idToken = run.step4?.body?.id_token;
+  const params = { client_id: run.config.clientId };
+  if (idToken) params.id_token_hint = idToken;
+  const base = `${normIssuer(run.config.issuer)}/protocol/openid-connect/logout`;
+  return { base, params, url: base + '?' + new URLSearchParams(params).toString() };
+}
+
+function buildOidcLogoutEntry(run) {
+  const end = oidcEndSession(run);
+  const rv = run.logout?.revoke;
+
+  let revokeHtml = `<div class="note">Not run yet — use “Single logout” on the left.</div>`;
+  if (rv?.error && !rv.url) {
+    revokeHtml = `<div class="note">${escapeHtml(rv.error)}</div>`;
+  } else if (rv) {
+    const ok = typeof rv.status === 'number' && rv.status >= 200 && rv.status < 300;
+    revokeHtml = `<div class="sub">POST <code>${escapeHtml(rv.url)}</code></div>
+      <div class="kv-title">Headers</div>${kvTable(rv.headers, rv.headers.Authorization ? ['Authorization'] : [])}
+      <div class="kv-title">Body (application/x-www-form-urlencoded)</div>${kvTable(rv.body, ['token', 'client_secret'])}
+      <div class="kv-title">Response</div>
+      ${rv.error
+        ? `<div class="note">${escapeHtml(rv.error)}</div>`
+        : `<div class="badges" style="margin-top:0;">${badge(ok, `HTTP ${rv.status} — token revoked`, `HTTP ${rv.status} — revoke failed`)}</div>
+           ${rv.resBody ? `<pre style="flex:none; min-height:0;">${escapeHtml(rv.resBody)}</pre>` : ''}`}`;
+  }
+
+  return {
+    key: 'logout', label: 'Logout',
+    title: 'Logout — single vs. SSO',
+    badge: rv ? badge(!rv.error && rv.status >= 200 && rv.status < 300, 'Tokens revoked', 'Revoke failed') : '',
+    body: `<div class="kv-title">Single logout — revoke tokens (this app only)</div>
+      <div class="note" style="margin-bottom:8px;">Back-channel call (RFC 7009) that invalidates this client's refresh token. The IdP's browser
+        session stays alive, so other apps — and this one, on the next login — are not signed out.</div>
+      ${revokeHtml}
+      <div class="kv-title" style="margin-top:22px;">SSO logout — end the IdP session (RP-initiated)</div>
+      <div class="note" style="margin-bottom:8px;">A browser redirect to the IdP's end-session endpoint. It ends the IdP's SSO session, which signs
+        out <b>every</b> app that shares it. ${end.params.id_token_hint ? '' : 'No id_token was issued, so <code>id_token_hint</code> is omitted and the IdP may ask for confirmation.'}</div>
+      <div class="sub">GET <code>${escapeHtml(end.base)}</code></div>
+      ${kvTable(end.params, ['id_token_hint'])}
+      <p><a href="${escapeHtml(end.url)}" target="_blank" rel="noopener">Open SSO logout in new tab ↗</a></p>`,
+  };
+}
+
+function oidcLogoutCard(run) {
+  const end = oidcEndSession(run);
+  return `<div class="card">
+    <div class="section-title"><h2>Logout</h2></div>
+    <form method="POST" action="/report/${escapeHtml(run.id)}/revoke">
+      <button class="btn block secondary" type="submit">Single logout — revoke tokens</button>
+    </form>
+    <a class="btn block secondary" style="margin-top:10px;" href="${escapeHtml(end.url)}" target="_blank" rel="noopener">SSO logout — end IdP session ↗</a>
+    <details class="hint-details">
+      <summary>What's the difference?</summary>
+      <p><b>Single</b> revokes only this client's tokens; the IdP session remains. <b>SSO</b> ends the IdP session itself,
+        so every app sharing it is signed out. See the Logout tab for the exact requests.</p>
+    </details>
+  </div>`;
+}
+
 function renderReport(run) {
   const cfg = run.config;
   const entries = buildStepEntries(run);
-  const activeKey = entries[entries.length - 1]?.key;
+  if (run.status === 'success') entries.push(buildOidcLogoutEntry(run));
+  const activeKey = run.logout ? 'logout' : entries.filter((e) => e.key !== 'logout').at(-1)?.key;
 
   const tabsHtml = entries.map((e) =>
     `<button class="tab-btn${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">${escapeHtml(e.label)}</button>`
@@ -781,7 +910,7 @@ function renderReport(run) {
       <p class="note">The IdP returned an error (or no code) during authorization, so the token exchange was skipped.</p>
       <a class="btn block secondary" href="/">Start a new test →</a>`;
   } else {
-    leftExtra = `<a class="btn block secondary" href="/">Start a new test →</a>`;
+    leftExtra = (run.status === 'success' ? oidcLogoutCard(run) : '') + `<a class="btn block secondary" href="/">Start a new test →</a>`;
   }
 
   const html = `<div class="wrap">
@@ -903,10 +1032,81 @@ function buildSamlStepEntries(run) {
   return entries;
 }
 
+function buildSamlLogoutEntry(run) {
+  const lg = run.logout;
+  if (!lg) return null;
+
+  if (lg.mode === 'local') {
+    return {
+      key: 'logout', label: 'Logout',
+      title: 'Local logout — this app only',
+      badge: `<span class="badge muted">No IdP contact</span>`,
+      body: `<div class="note">Nothing was sent to the IdP. A local logout only forgets the session on the SP side, so the IdP's
+        SSO session is still alive: starting a new login will usually sign straight back in without asking for a password.</div>`,
+    };
+  }
+
+  const r = lg.response;
+  const slsUrl = new URL('/saml/slo', run.config.acsUrl).href;
+  let respHtml = `<div class="note">No LogoutResponse received yet. Click “Send to IdP”, then come back here (the IdP posts/redirects
+    its LogoutResponse to <code>${escapeHtml(slsUrl)}</code>, which needs to be set as the client's Logout Service URL).</div>`;
+  let respBadge = `<span class="badge muted">Awaiting response</span>`;
+  if (r?.error) {
+    respHtml = `<div class="note">${escapeHtml(r.error)}</div>`;
+    respBadge = badge(false, '', 'Bad response');
+  } else if (r) {
+    const success = r.statusCode === 'urn:oasis:names:tc:SAML:2.0:status:Success';
+    respBadge = badge(success, 'Logged out', 'Logout failed');
+    respHtml = `<div class="badges" style="margin-top:0;">
+        ${badge(success, 'Status: Success', 'Status: ' + (r.statusCode || 'unknown'))}
+        ${badge(r.inResponseTo === lg.requestId, 'InResponseTo matches request', 'InResponseTo mismatch')}
+      </div>
+      ${kvTable({ Binding: r.binding, Issuer: r.issuer, InResponseTo: r.inResponseTo })}
+      <div class="kv-title">LogoutResponse XML</div><pre style="flex:none; min-height:0;">${escapeHtml(r.xml)}</pre>
+      <div class="note" style="margin-top:8px;">The LogoutResponse signature is not verified here — only its status and InResponseTo are checked.</div>`;
+  }
+
+  return {
+    key: 'logout', label: 'Logout',
+    title: 'SP-initiated Single Logout (SLO)',
+    badge: respBadge,
+    body: `<div class="note" style="margin-bottom:8px;">A LogoutRequest naming this user's NameID and SessionIndex. The IdP ends its SSO session and, if other SPs
+      registered a logout URL, asks them to log out too — that's what makes SAML logout “single”.</div>
+      <div class="kv-title">LogoutRequest XML (before deflate + base64)</div>
+      <pre style="flex:none; min-height:0;">${escapeHtml(lg.xml)}</pre>
+      <div class="kv-title">Query parameters</div>${kvTable(lg.params)}
+      <p>${lg.signed ? badge(true, 'Signed') : '<span class="badge muted">Unsigned</span>'}
+        <a href="${escapeHtml(lg.url)}" target="_blank" rel="noopener" style="margin-left:10px;">Send to IdP ↗</a></p>
+      <div class="kv-title">LogoutResponse</div>${respHtml}`,
+  };
+}
+
+function samlLogoutCard(run) {
+  if (!run.step3?.assertion) return '';
+  return `<div class="card">
+    <div class="section-title"><h2>Logout</h2></div>
+    <form method="POST" action="/saml/report/${escapeHtml(run.id)}/logout">
+      <input type="hidden" name="mode" value="slo">
+      <button class="btn block secondary" type="submit">Single Logout (SLO) — LogoutRequest to IdP</button>
+    </form>
+    <form method="POST" action="/saml/report/${escapeHtml(run.id)}/logout" style="margin-top:10px;">
+      <input type="hidden" name="mode" value="local">
+      <button class="btn block secondary" type="submit">Local logout only (this app)</button>
+    </form>
+    <details class="hint-details">
+      <summary>What's the difference?</summary>
+      <p><b>SLO</b> builds a LogoutRequest and lets you send it to the IdP, which ends the SSO session for every participating app.
+        <b>Local</b> contacts nobody — the IdP session survives.</p>
+    </details>
+  </div>`;
+}
+
 function renderSamlReport(run) {
   const cfg = run.config;
   const entries = buildSamlStepEntries(run);
-  const activeKey = entries[entries.length - 1]?.key;
+  const logoutEntry = buildSamlLogoutEntry(run);
+  if (logoutEntry) entries.push(logoutEntry);
+  const activeKey = run.logout ? 'logout' : entries.filter((e) => e.key !== 'logout').at(-1)?.key;
 
   const tabsHtml = entries.map((e) =>
     `<button class="tab-btn${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">${escapeHtml(e.label)}</button>`
@@ -934,8 +1134,10 @@ function renderSamlReport(run) {
             <tr><td>ACS URL</td><td><code style="word-break:break-all;">${escapeHtml(cfg.acsUrl)}</code></td></tr>
             <tr><td>Request ID</td><td><code>${escapeHtml(run.requestId)}</code></td></tr>
             <tr><td>Status</td><td>${(STATUS_BADGE[run.status] || (() => escapeHtml(run.status)))()}</td></tr>
+            <tr><td>Logout</td><td>${run.logout ? (run.logout.mode === 'local' ? '<span class="badge muted">Local only</span>' : run.logout.response ? badge(run.logout.response.statusCode === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'SLO complete', 'SLO failed') : '<span class="badge muted">SLO requested</span>') : '—'}</td></tr>
           </table>
         </div>
+        ${samlLogoutCard(run)}
         <a class="btn block secondary" href="/saml">Start a new SAML test →</a>
       </div>
 
@@ -1049,17 +1251,7 @@ async function performTokenExchange(run) {
 
   const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
 
-  if (run.config.authOn) {
-    if (run.config.authMethod === 'basic') {
-      headers['Authorization'] = 'Basic ' + Buffer.from(`${run.config.clientId}:${run.config.clientSecret}`).toString('base64');
-      // When using Basic auth, client_id is not duplicated in the body (per spec).
-    } else {
-      bodyParams.client_id = run.config.clientId;
-      bodyParams.client_secret = run.config.clientSecret;
-    }
-  } else {
-    bodyParams.client_id = run.config.clientId; // public: client_id only, no secret
-  }
+  applyClientAuth(run.config, headers, bodyParams);
 
   run.step3 = { url: tokenUrl, method: 'POST', headers: { ...headers }, body: { ...bodyParams } };
 
@@ -1155,9 +1347,10 @@ app.post('/saml/start', (req, res) => {
     forceAuthn: !!forceAuthn,
   });
 
-  let built;
+  let built, keyObj = null;
   try {
-    built = buildRedirectUrl({ ssoUrl, requestXml: xml, relayState, privateKey: signOn ? normalizePrivateKey(spPrivateKey) : null });
+    keyObj = signOn ? normalizePrivateKey(spPrivateKey) : null;
+    built = buildRedirectUrl({ ssoUrl, requestXml: xml, relayState, privateKey: keyObj });
   } catch (e) {
     return res.status(400).json({ error: 'Could not build the request: ' + e.message });
   }
@@ -1170,6 +1363,7 @@ app.post('/saml/start', (req, res) => {
       nameIdFormat: nameIdFormat || '', forceAuthn: !!forceAuthn, signOn: !!signOn,
     },
     requestId,
+    privateKey: keyObj,
     step1: { xml, url: built.url, params: built.params, samlRequestB64: built.samlRequestB64, signed: built.signed },
     step2: null, step3: null,
     status: 'pending',
@@ -1263,6 +1457,102 @@ app.get('/report/:state', (req, res) => {
   }
   res.send(renderReport(run));
 });
+
+// OIDC single logout: revoke this client's tokens at the IdP (back-channel).
+// The SSO logout is a plain browser link built at render time.
+app.post('/report/:state/revoke', async (req, res) => {
+  const run = runs.get(req.params.state);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  const tokens = run.step4?.body;
+  const token = tokens?.refresh_token || tokens?.access_token;
+  if (!token) {
+    run.logout = { ...(run.logout || {}), revoke: { error: 'There is no token to revoke.' } };
+    return res.redirect(`/report/${run.id}`);
+  }
+
+  const url = `${normIssuer(run.config.issuer)}/protocol/openid-connect/revoke`;
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  const body = { token, token_type_hint: tokens.refresh_token ? 'refresh_token' : 'access_token' };
+  applyClientAuth(run.config, headers, body);
+
+  const rec = { url, headers: { ...headers }, body: { ...body } };
+  try {
+    const r = await fetch(url, { method: 'POST', headers, body: new URLSearchParams(body) });
+    rec.status = r.status;
+    rec.statusText = r.statusText;
+    rec.resBody = await r.text();
+  } catch (e) {
+    rec.error = e.message;
+  }
+  run.logout = { ...(run.logout || {}), revoke: rec };
+  res.redirect(`/report/${run.id}`);
+});
+
+// SAML logout: either build an SP-initiated LogoutRequest (shown first, sent
+// by the user), or just forget the session locally without contacting the IdP.
+app.post('/saml/report/:id/logout', (req, res) => {
+  const run = samlRuns.get(req.params.id);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  const a = run.step3?.assertion;
+  if (!a) {
+    return res.status(400).send(renderError('Nothing to log out', 'This run has no assertion, so there is no session to end.'));
+  }
+
+  if (req.body?.mode === 'local') {
+    run.logout = { mode: 'local', at: Date.now() };
+    return res.redirect(`/saml/report/${run.id}`);
+  }
+
+  const requestId = '_' + crypto.randomBytes(16).toString('hex');
+  const xml = buildLogoutRequestXml({
+    id: requestId,
+    issueInstant: new Date().toISOString(),
+    destination: run.config.ssoUrl,
+    spEntityId: run.config.spEntityId,
+    nameId: a.subject.nameId,
+    nameIdFormat: a.subject.nameIdFormat,
+    sessionIndex: a.authn?.sessionIndex,
+  });
+  let built;
+  try {
+    built = buildRedirectUrl({ ssoUrl: run.config.ssoUrl, requestXml: xml, relayState: run.id, privateKey: run.privateKey });
+  } catch (e) {
+    return res.status(400).send(renderError('Could not build the request', e.message));
+  }
+  run.logout = { mode: 'slo', requestId, xml, url: built.url, params: built.params, signed: built.signed, response: null };
+  res.redirect(`/saml/report/${run.id}`);
+});
+
+// Single Logout Service: where the IdP returns its LogoutResponse.
+function handleSlo(req, res) {
+  const src = (req.method === 'GET' ? req.query : req.body) || {};
+  const run = src.RelayState && samlRuns.get(String(src.RelayState));
+  if (!run || run.logout?.mode !== 'slo') {
+    return res.status(400).send(renderError(
+      'No matching logout',
+      'The RelayState does not match a logout started from this app (it may have expired, or the IdP did not echo RelayState).'
+    ));
+  }
+  if (src.SAMLRequest && !src.SAMLResponse) {
+    return res.status(501).send(renderError('IdP-initiated logout', 'A LogoutRequest from the IdP was received, but IdP-initiated logout is not implemented.'));
+  }
+  try {
+    run.logout.response = {
+      receivedAt: Date.now(),
+      binding: req.method === 'GET' ? 'HTTP-Redirect' : 'HTTP-POST',
+      ...parseLogoutResponse(decodeSamlMessage(src.SAMLResponse || '')),
+    };
+  } catch (e) {
+    run.logout.response = { error: e.message };
+  }
+  res.redirect(`/saml/report/${run.id}`);
+}
+app.get('/saml/slo', handleSlo);
+app.post('/saml/slo', handleSlo);
 
 app.get('/api/runs', (req, res) => {
   const list = [...runs.entries()]

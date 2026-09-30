@@ -90,7 +90,7 @@ input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--prim
 pre{
   background:#0f1115; color:#e6e8eb; padding:14px 16px; border-radius:10px; overflow:auto;
   font-family: var(--mono); font-size:12.5px; margin:8px 0 0;
-  flex:1; min-height:140px; white-space:pre-wrap; word-break:break-all;
+  flex:1; min-height:140px; max-height:70vh; white-space:pre-wrap; word-break:break-all;
 }
 table.kv{ width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
 table.kv td{ padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
@@ -140,3 +140,14 @@ a{ color:var(--primary); }
 .file-pick{ padding:4px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--ink); font-weight:600; font-size:12px; cursor:pointer; }
 .file-pick:hover{ border-color:var(--primary); color:var(--primary); }
 textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
+
+/* Left column: inputs scroll inside it, action buttons stay pinned in view */
+.layout-left.pinned{ display:flex; flex-direction:column; max-height:calc(100vh - 40px); }
+.layout-left.pinned .left-scroll{ flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:4px; }
+.layout-left.pinned .left-actions{ flex:none; padding-top:12px; }
+.link-btn{ display:block; margin:10px auto 0; background:none; border:none; padding:2px 6px; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; }
+.link-btn:hover{ color:var(--bad); }
+@media (max-width:900px){
+  .layout-left.pinned{ max-height:none; }
+  .layout-left.pinned .left-scroll{ overflow:visible; }
+}
