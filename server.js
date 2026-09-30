@@ -876,6 +876,47 @@ const STATUS_BADGE = {
   no_response: () => badge(false, '', 'No SAMLResponse'),
 };
 
+const utc = (ms) => new Date(ms).toISOString().slice(11, 19) + ' UTC';
+const banner = (kind, html) => `<div class="banner ${kind}">${html}</div>`;
+
+function oidcLogoutBanner(run) {
+  const lg = run.logout;
+  if (!lg) return '';
+  const latest = [['chk', lg.check?.at], ['sso', lg.endSession?.at], ['rv', lg.revoke ? (lg.revoke.at || 1) : null]]
+    .filter(([, t]) => t).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+  if (latest === 'chk') {
+    const c = lg.check;
+    if (c.error) return banner('warn', `<b>Could not check the session</b> — ${escapeHtml(c.error)}`);
+    return c.ended
+      ? banner('ok', `<b>Logged out.</b> The IdP no longer accepts this session's access token (userinfo → HTTP ${c.status}, checked ${utc(c.at)}).`)
+      : banner('bad', `<b>Still signed in.</b> The IdP still accepts the access token (userinfo → HTTP ${c.status}, checked ${utc(c.at)}). An access token can stay valid after a revoke until it expires.`);
+  }
+  if (latest === 'sso') {
+    return banner('warn', `<b>SSO logout sent</b> to the IdP at ${utc(lg.endSession.at)} (opened in a new tab). Use “Check session” to confirm it took effect.`);
+  }
+  const rv = lg.revoke;
+  if (rv.error && !rv.status) return banner('bad', `<b>Single logout failed</b> — ${escapeHtml(rv.error)}`);
+  const ok = rv.status >= 200 && rv.status < 300;
+  return ok
+    ? banner('ok', `<b>Single logout done.</b> This client's tokens were revoked (HTTP ${rv.status}, ${utc(rv.at)}). Whether the IdP session survives depends on the IdP — use “Check session”.`)
+    : banner('bad', `<b>Single logout failed</b> — the IdP answered HTTP ${rv.status}.`);
+}
+
+function samlLogoutBanner(run) {
+  const lg = run.logout;
+  if (!lg) return '';
+  if (lg.mode === 'local') {
+    return banner('warn', `<b>Local logout only.</b> This app dropped the session at ${utc(lg.at)}; nothing was sent to the IdP, so its SSO session is still alive.`);
+  }
+  const r = lg.response;
+  if (!r) return banner('warn', '<b>Logout not completed yet.</b> The LogoutRequest is built but no LogoutResponse has come back — open the Logout tab and send it to the IdP.');
+  if (r.error) return banner('bad', `<b>Logout response could not be read</b> — ${escapeHtml(r.error)}`);
+  return r.statusCode === 'urn:oasis:names:tc:SAML:2.0:status:Success'
+    ? banner('ok', `<b>Logged out.</b> The IdP confirmed Single Logout with a LogoutResponse (Success) at ${utc(r.receivedAt)}.`)
+    : banner('bad', `<b>Logout failed.</b> LogoutResponse status: ${escapeHtml(r.statusCode || 'unknown')}.`);
+}
+
 function oidcEndSession(run) {
   const base = run.endpoints.end_session_endpoint;
   if (!base) return null;
@@ -918,7 +959,7 @@ function buildOidcLogoutEntry(run) {
         out <b>every</b> app that shares it. ${end.params.id_token_hint ? '' : 'No id_token was issued, so <code>id_token_hint</code> is omitted and the IdP may ask for confirmation.'}</div>
       <div class="sub">GET <code>${escapeHtml(end.base)}</code></div>
       ${kvTable(end.params, ['id_token_hint'])}
-      <p><a href="${escapeHtml(end.url)}" target="_blank" rel="noopener">Open SSO logout in new tab ↗</a></p>` :
+      <p class="note">Send it with the “SSO logout” button on the left.</p>` :
         `<div class="note">The IdP's discovery document does not advertise an <code>end_session_endpoint</code>, so SSO logout is not available.</div>`}`,
   };
 }
@@ -928,11 +969,14 @@ function oidcLogoutCard(run) {
   return `<div class="card">
     <div class="section-title"><h2>Logout</h2></div>
     <form method="POST" action="/report/${escapeHtml(run.id)}/revoke">
-      <button class="btn block secondary" type="submit">Single logout — revoke tokens</button>
+      <button class="btn block danger-soft" type="submit">Single logout — revoke tokens</button>
     </form>
     ${end
-      ? `<a class="btn block secondary" style="margin-top:10px;" href="${escapeHtml(end.url)}" target="_blank" rel="noopener">SSO logout — end IdP session ↗</a>`
+      ? `<a class="btn block danger" style="margin-top:10px;" href="/report/${escapeHtml(run.id)}/end-session" target="_blank" rel="noopener" onclick="setTimeout(() => location.reload(), 700)">SSO logout — end IdP session ↗</a>`
       : `<p class="note" style="margin-top:10px;">SSO logout unavailable: no <code>end_session_endpoint</code> in the discovery document.</p>`}
+    ${(run.logout?.revoke || run.logout?.endSession) && run.endpoints.userinfo_endpoint ? `<form method="POST" action="/report/${escapeHtml(run.id)}/check" style="margin-top:10px;">
+      <button class="btn block secondary" type="submit">Check session</button>
+    </form>` : ''}
     <details class="hint-details">
       <summary>What's the difference?</summary>
       <p><b>Single</b> revokes only this client's tokens; whether the IdP session survives depends on the IdP (Keycloak drops it when this was the only client in it). <b>SSO</b> ends the IdP session itself,
@@ -978,6 +1022,7 @@ function renderReport(run) {
     <h1 style="margin-top:10px;">Test report
       <small>${escapeHtml(cfg.clientId)} · Client authentication: <b>${cfg.authOn ? `On (${cfg.authMethod})` : 'Off'}</b> · PKCE: <b>${cfg.pkceOn ? `On (${cfg.pkceMethod})` : 'Off'}</b></small>
     </h1>
+    ${oidcLogoutBanner(run)}
 
     <div class="layout">
       <div class="layout-left">
@@ -1166,11 +1211,11 @@ function samlLogoutCard(run) {
     <div class="section-title"><h2>Logout</h2></div>
     <form method="POST" action="/saml/report/${escapeHtml(run.id)}/logout">
       <input type="hidden" name="mode" value="slo">
-      <button class="btn block secondary" type="submit">Single Logout (SLO) — LogoutRequest to IdP</button>
+      <button class="btn block danger" type="submit">Single Logout (SLO) — LogoutRequest to IdP</button>
     </form>
     <form method="POST" action="/saml/report/${escapeHtml(run.id)}/logout" style="margin-top:10px;">
       <input type="hidden" name="mode" value="local">
-      <button class="btn block secondary" type="submit">Local logout only (this app)</button>
+      <button class="btn block danger-soft" type="submit">Local logout only (this app)</button>
     </form>
     <details class="hint-details">
       <summary>What's the difference?</summary>
@@ -1202,6 +1247,7 @@ function renderSamlReport(run) {
     <h1 style="margin-top:10px;">SAML test report
       <small>${escapeHtml(cfg.spEntityId)} · Signed request: <b>${cfg.signOn ? 'On' : 'Off'}</b> · ForceAuthn: <b>${cfg.forceAuthn ? 'On' : 'Off'}</b></small>
     </h1>
+    ${samlLogoutBanner(run)}
 
     <div class="layout">
       <div class="layout-left">
@@ -1298,6 +1344,7 @@ app.post('/start', async (req, res) => {
     jwks_uri: d.jwks_uri || null,
     end_session_endpoint: d.end_session_endpoint || null,
     revocation_endpoint: d.revocation_endpoint || null,
+    userinfo_endpoint: d.userinfo_endpoint || null,
   };
 
   const state = crypto.randomUUID();
@@ -1558,6 +1605,45 @@ app.get('/report/:state', (req, res) => {
   res.send(renderReport(run));
 });
 
+// SSO logout: note that it was started, then send the browser to the IdP.
+app.get('/report/:state/end-session', (req, res) => {
+  const run = runs.get(req.params.state);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  const end = oidcEndSession(run);
+  if (!end) {
+    return res.status(400).send(renderError('SSO logout unavailable', 'The IdP\'s discovery document has no end_session_endpoint.'));
+  }
+  run.logout = { ...(run.logout || {}), endSession: { at: Date.now() } };
+  res.redirect(end.url);
+});
+
+// "Check session": ask the IdP's userinfo endpoint whether the access token is still honored.
+app.post('/report/:state/check', async (req, res) => {
+  const run = runs.get(req.params.state);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  const url = run.endpoints.userinfo_endpoint;
+  const accessToken = run.step4?.body?.access_token;
+  const rec = { at: Date.now() };
+  if (!url) rec.error = 'The IdP\'s discovery document does not advertise a userinfo_endpoint.';
+  else if (!accessToken) rec.error = 'There is no access token to test.';
+  else {
+    try {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + accessToken } });
+      rec.status = r.status;
+      rec.ended = r.status === 401 || r.status === 403;
+      if (!rec.ended && !r.ok) rec.error = `Unexpected response: HTTP ${r.status}`;
+    } catch (e) {
+      rec.error = e.message;
+    }
+  }
+  run.logout = { ...(run.logout || {}), check: rec };
+  res.redirect(`/report/${run.id}`);
+});
+
 // OIDC single logout: revoke this client's tokens at the IdP (back-channel).
 // The SSO logout is a plain browser link built at render time.
 app.post('/report/:state/revoke', async (req, res) => {
@@ -1581,7 +1667,7 @@ app.post('/report/:state/revoke', async (req, res) => {
   const body = { token, token_type_hint: tokens.refresh_token ? 'refresh_token' : 'access_token' };
   applyClientAuth(run.config, headers, body);
 
-  const rec = { url, headers: { ...headers }, body: { ...body } };
+  const rec = { at: Date.now(), url, headers: { ...headers }, body: { ...body } };
   try {
     const r = await fetch(url, { method: 'POST', headers, body: new URLSearchParams(body) });
     rec.status = r.status;
