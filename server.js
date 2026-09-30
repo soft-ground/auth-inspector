@@ -292,6 +292,24 @@ function buildAuthnRequestXml({ id, issueInstant, destination, acsUrl, spEntityI
     `</samlp:AuthnRequest>`;
 }
 
+// Keycloak hands out keys/certs as bare base64 (no -----BEGIN----- lines), so
+// accept both PEM and bare base64 and normalize.
+function normalizePrivateKey(input) {
+  const t = String(input).trim();
+  if (t.includes('-----BEGIN')) return crypto.createPrivateKey(t);
+  const der = Buffer.from(t.replace(/\s+/g, ''), 'base64');
+  for (const type of ['pkcs8', 'pkcs1']) {
+    try { return crypto.createPrivateKey({ key: der, format: 'der', type }); } catch { /* try next */ }
+  }
+  throw new Error('Unrecognized private key format (expected PEM, or bare base64 PKCS#8 / PKCS#1).');
+}
+function normalizeCert(input) {
+  const t = String(input || '').trim();
+  if (!t || t.includes('-----BEGIN')) return t;
+  const b64 = t.replace(/\s+/g, '');
+  return `-----BEGIN CERTIFICATE-----\n${b64.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`;
+}
+
 // Redirect binding: raw DEFLATE -> base64 -> URL-encode. When signing, the
 // signature covers the exact query string "SAMLRequest=..&RelayState=..&SigAlg=..".
 function buildRedirectUrl({ ssoUrl, requestXml, relayState, privateKey }) {
@@ -1139,7 +1157,7 @@ app.post('/saml/start', (req, res) => {
 
   let built;
   try {
-    built = buildRedirectUrl({ ssoUrl, requestXml: xml, relayState, privateKey: signOn ? spPrivateKey : null });
+    built = buildRedirectUrl({ ssoUrl, requestXml: xml, relayState, privateKey: signOn ? normalizePrivateKey(spPrivateKey) : null });
   } catch (e) {
     return res.status(400).json({ error: 'Could not build the request: ' + e.message });
   }
@@ -1148,7 +1166,7 @@ app.post('/saml/start', (req, res) => {
     id: relayState,
     createdAt: Date.now(),
     config: {
-      ssoUrl, cert: cert || '', spEntityId, acsUrl,
+      ssoUrl, cert: normalizeCert(cert), spEntityId, acsUrl,
       nameIdFormat: nameIdFormat || '', forceAuthn: !!forceAuthn, signOn: !!signOn,
     },
     requestId,
