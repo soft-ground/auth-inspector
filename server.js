@@ -306,6 +306,7 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
     isBareAssertion,
     status,
     responseIssuer,
+    responseInResponseTo: responseNode ? xattr(responseNode, 'InResponseTo') : null,
     assertion,
     signatures: signatureResults,
     anySignedAndValid: signatureResults.length > 0 && signatureResults.every((s) => s.verified),
@@ -1117,6 +1118,11 @@ function buildSamlStepEntries(run) {
           ${a ? badge(a.inResponseToOk, 'InResponseTo matches request', 'InResponseTo mismatch') : ''}
         </div>
         ${sigRows}
+        ${a ? `<div class="kv-title">Request matching</div>${kvTable({
+          'Request ID (this run)': run.requestId,
+          'Response InResponseTo': d.responseInResponseTo ?? '—',
+          'Assertion InResponseTo': a.subject.inResponseTo ?? '—',
+        })}` : ''}
         ${a ? `<div class="kv-title">Timing (checked against this server's clock)</div>${kvTable(Object.fromEntries([
           ['Validated at (UTC)', a.timing.validatedAt],
           ['Assertion IssueInstant (IdP clock)', a.timing.issueInstant],
