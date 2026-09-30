@@ -188,7 +188,11 @@ function verifySamlSignature(signatureNode, xmlString, cert) {
   }
 }
 
-function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, expectedInResponseTo, clockSkewSec = 0 }) {
+// Keycloak's assertions are valid for only ~60 s, so a much larger allowance
+// would hide real expiries; 60 s absorbs an NTP-level drift without doing that.
+const SAML_CLOCK_SKEW_SEC = 60;
+
+function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, expectedInResponseTo }) {
   const xmlString = decodeSamlInput(raw);
 
   const parseErrors = [];
@@ -257,7 +261,7 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
     })) : [];
 
     const now = new Date();
-    const skewMs = clockSkewSec * 1000;
+    const skewMs = SAML_CLOCK_SKEW_SEC * 1000;
     const secs = (ms) => Math.round(ms) / 1000;
     const nbMs = conditions.notBefore ? new Date(conditions.notBefore).getTime() : null;
     const noaMs = conditions.notOnOrAfter ? new Date(conditions.notOnOrAfter).getTime() : null;
@@ -267,6 +271,7 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
     const notBeforeOk = nbMs === null || now.getTime() + skewMs >= nbMs;
     const notOnOrAfterOk = noaMs === null || now.getTime() - skewMs < noaMs;
     const confirmationOk = confMs === null || now.getTime() - skewMs < confMs;
+    const strictTimeOk = (nbMs === null || now.getTime() >= nbMs) && (noaMs === null || now.getTime() < noaMs);
     // Positive "Since"/"Left" means comfortably inside the window; the offset is
     // this server's clock minus the IdP's (plus network delay, well under a second).
     const timing = {
@@ -276,7 +281,8 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
       notBeforeSinceSec: nbMs === null ? null : secs(now.getTime() - nbMs),
       notOnOrAfterLeftSec: noaMs === null ? null : secs(noaMs - now.getTime()),
       confirmationLeftSec: confMs === null ? null : secs(confMs - now.getTime()),
-      skewSec: clockSkewSec,
+      skewSec: SAML_CLOCK_SKEW_SEC,
+      usedSkew: notBeforeOk && notOnOrAfterOk && !strictTimeOk,
     };
     const audienceOk = expectedAudience ? conditions.audiences.includes(expectedAudience) : null;
     const recipientOk = expectedRecipient ? subject.recipient === expectedRecipient : null;
@@ -704,10 +710,6 @@ function renderSamlHome() {
       <div class="card">
         <div class="section-title"><h2>Security options</h2></div>
         <div class="field">
-          <label>Clock skew tolerance (seconds) <span class="hint">how far this machine's clock may differ from the IdP's when checking NotBefore / NotOnOrAfter</span></label>
-          <input type="text" id="clockSkew" inputmode="numeric" placeholder="0">
-        </div>
-        <div class="field">
           <label>Sign AuthnRequest</label>
           <div class="toggle-group" id="signToggle">
             <button type="button" data-val="off" class="active">Off</button>
@@ -1057,7 +1059,7 @@ function buildSamlStepEntries(run) {
       body: `<div class="badges" style="margin-top:0;">
           ${badge(d.anySignedAndValid, 'Signature valid', d.signatures.length ? 'Signature invalid' : 'Not signed')}
           ${d.status ? badge(d.status.code === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'Status: Success', 'Status: ' + (d.status.code || 'unknown')) : ''}
-          ${a ? badge(a.timeValid, 'Within Conditions window', timeBadText(a.timing)) : ''}
+          ${a ? (a.timeValid && a.timing.usedSkew ? `<span class="badge warn">Valid only with the ±${a.timing.skewSec} s clock-skew allowance</span>` : badge(a.timeValid, 'Within Conditions window', timeBadText(a.timing))) : ''}
           ${a ? badge(a.confirmationValid, 'Confirmation not expired', 'Confirmation expired') : ''}
           ${a ? badge(a.audienceOk, 'Audience matches SP Entity ID', 'Audience mismatch') : ''}
           ${a ? badge(a.recipientOk, 'Recipient matches ACS URL', 'Recipient mismatch') : ''}
@@ -1070,7 +1072,7 @@ function buildSamlStepEntries(run) {
           ['Clock offset, this server − IdP', a.timing.offsetSec === null ? null : `${a.timing.offsetSec >= 0 ? '+' : ''}${fmt(a.timing.offsetSec)} (≈ skew + network delay)`],
           ['Conditions NotBefore', a.timing.notBeforeSinceSec === null ? null : `${a.conditions.notBefore} — ${a.timing.notBeforeSinceSec >= 0 ? 'started ' + fmt(a.timing.notBeforeSinceSec) + ' ago' : 'starts in ' + fmt(-a.timing.notBeforeSinceSec)}`],
           ['Conditions NotOnOrAfter', a.timing.notOnOrAfterLeftSec === null ? null : `${a.conditions.notOnOrAfter} — ${a.timing.notOnOrAfterLeftSec > 0 ? fmt(a.timing.notOnOrAfterLeftSec) + ' left' : 'passed ' + fmt(-a.timing.notOnOrAfterLeftSec) + ' ago'}`],
-          ['Clock skew tolerance', fmt(a.timing.skewSec)],
+          ['Clock skew allowance (fixed)', '±' + fmt(a.timing.skewSec)],
         ].filter(([, v]) => v !== null)))}` : ''}`,
     });
 
@@ -1420,7 +1422,7 @@ app.post('/saml/discover', async (req, res) => {
 
 // Step 1: build the AuthnRequest and the redirect URL. Nothing is sent yet.
 app.post('/saml/start', (req, res) => {
-  const { ssoUrl, cert, spEntityId, acsUrl, nameIdFormat, forceAuthn, signOn, spPrivateKey, clockSkewSec } = req.body || {};
+  const { ssoUrl, cert, spEntityId, acsUrl, nameIdFormat, forceAuthn, signOn, spPrivateKey } = req.body || {};
   if (!ssoUrl || !spEntityId || !acsUrl) {
     return res.status(400).json({ error: 'IdP SSO URL, SP Entity ID, and ACS URL are required.' });
   }
@@ -1453,7 +1455,6 @@ app.post('/saml/start', (req, res) => {
     config: {
       ssoUrl, cert: normalizeCert(cert), spEntityId, acsUrl,
       nameIdFormat: nameIdFormat || '', forceAuthn: !!forceAuthn, signOn: !!signOn,
-      clockSkewSec: Math.min(3600, Math.max(0, Number(clockSkewSec) || 0)),
     },
     requestId,
     privateKey: keyObj,
@@ -1489,7 +1490,6 @@ app.post('/saml/acs', (req, res) => {
         expectedAudience: run.config.spEntityId,
         expectedRecipient: run.config.acsUrl,
         expectedInResponseTo: run.requestId,
-        clockSkewSec: run.config.clockSkewSec,
       });
       const a = run.step3.assertion;
       const ok = run.step3.anySignedAndValid && a && a.timeValid && a.confirmationValid &&

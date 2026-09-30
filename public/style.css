@@ -156,3 +156,5 @@ textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
 .btn.go:hover{ background:#15694a; }
 .secret:not(.mask){ word-break:break-all; }
 .secret:not(.mask)::after{ content:" 🙈"; opacity:.6; }
+
+.badge.warn{ background:#fff4e0; color:#a15c00; }

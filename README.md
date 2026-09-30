@@ -39,8 +39,8 @@ request / POST response)** run as a full client/SP flow, with every step visible
     the parsed assertion (Subject, AuthnStatement, Attributes).
   - Time checks are explained, not just pass/fail: Step 3 shows when validation
     ran, the estimated clock offset against the assertion's `IssueInstant`, and how
-    far `NotBefore`/`NotOnOrAfter` are from now. An optional **clock skew
-    tolerance** (seconds) covers a machine clock that drifts from the IdP's.
+    far `NotBefore`/`NotOnOrAfter` are from now. A fixed **±60 s clock-skew allowance** absorbs a machine clock that drifts
+    from the IdP's, and the result is flagged when it passed only thanks to it.
   - **Logout**: *SP-initiated Single Logout* builds a `LogoutRequest`
     (NameID + SessionIndex, signed if signing is On), shows it, and — once
     sent — validates the `LogoutResponse` that returns to `/saml/slo`
