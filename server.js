@@ -431,7 +431,17 @@ function page(title, bodyHtml, activeProtocol = 'oidc') {
 </header>
 ${bodyHtml}
 <script>
-function revealSecret(el){ el.textContent = el.dataset.value; el.classList.remove('mask'); }
+function revealSecret(el){
+  if (el.classList.contains('mask')) {
+    el.textContent = el.dataset.value;
+    el.classList.remove('mask');
+    el.title = 'Click to hide';
+  } else {
+    el.textContent = '••••••••••••';
+    el.classList.add('mask');
+    el.title = 'Click to reveal';
+  }
+}
 
 // Generic tab switching for any ".tab-group" (a ".tabs" bar of ".tab-btn"
 // alongside sibling ".tab-panel" elements, matched by data-tab).
@@ -592,7 +602,7 @@ function renderHome() {
       </div>
       <div class="left-actions">
         <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate authentication request →</button>
-        <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+        <button class="btn block go" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
         <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
       </div>
     </div>
@@ -603,7 +613,7 @@ function renderHome() {
       <div class="card tab-group">
         <div class="tabs" id="resultTabs">
           <button class="tab-btn" data-tab="discovery" id="tabBtnDiscovery" style="display:none;">Discovery</button>
-          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Step 1</button>
+          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Request preview</button>
         </div>
         <div class="placeholder" id="resultsPlaceholder">Run a step on the left to see its request/response here.</div>
         <div class="tab-panel" data-tab="discovery" id="tabPanelDiscovery"></div>
@@ -697,7 +707,7 @@ function renderSamlHome() {
       </div>
       <div class="left-actions">
         <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate SAMLRequest →</button>
-        <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
+        <button class="btn block go" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
         <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
       </div>
     </div>
@@ -708,7 +718,7 @@ function renderSamlHome() {
       <div class="card tab-group">
         <div class="tabs" id="resultTabs">
           <button class="tab-btn" data-tab="metadata" id="tabBtnMetadata" style="display:none;">Metadata</button>
-          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Step 1</button>
+          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Request preview</button>
         </div>
         <div class="placeholder" id="resultsPlaceholder">Run a step on the left to see its request/response here.</div>
         <div class="tab-panel" data-tab="metadata" id="tabPanelMetadata"></div>
