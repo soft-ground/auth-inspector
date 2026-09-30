@@ -182,3 +182,19 @@ $('startBtn').addEventListener('click', async () => {
 $('goBtn').addEventListener('click', () => {
   if (lastUrl) window.open(lastUrl, '_blank', 'noopener');
 });
+
+// ── Reset every input (and the saved copies) back to a fresh state ───────────
+$('resetBtn').addEventListener('click', () => {
+  if (!confirm('Clear all inputs and the values saved in this browser?')) return;
+  FIELDS.forEach((id) => localStorage.removeItem('auth-inspector:saml:' + id));
+  ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'spPrivateKey'].forEach((id) => { $(id).value = ''; });
+  $('acsUrl').value = location.origin + '/saml/acs';
+  $('nameIdFormat').value = '';
+  ['forceAuthnToggle', 'signToggle'].forEach((id) => $(id).querySelector('button').click());
+
+  document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => { b.style.display = 'none'; b.classList.remove('active'); });
+  document.querySelectorAll('.tab-group .tab-panel').forEach((p) => { p.innerHTML = ''; p.classList.remove('active'); });
+  $('resultsPlaceholder').style.display = '';
+  $('goBtn').style.display = 'none';
+  lastUrl = null;
+});

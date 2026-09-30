@@ -17,6 +17,10 @@ request / POST response)** run as a full client/SP flow, with every step visible
     response) → Step 3 (token exchange request) → Step 4 (token response) →
     Step 5/6 (**ID/Access Token decode + JWKS signature verification +
     audience/nonce checks**), all on one report page.
+  - **Logout**, both ways: *single logout* revokes this client's tokens
+    (RFC 7009 back-channel call; the IdP session survives), and *SSO logout*
+    sends the browser to the IdP's end-session endpoint (RP-initiated, with
+    `id_token_hint`), which signs out every app sharing the IdP session.
 - **SAML** (this app acts as the Service Provider)
   - Enter the IdP SSO URL + signing certificate (or fetch both from the IdP
     metadata URL), plus SP Entity ID, ACS URL, NameID format, and
@@ -31,6 +35,15 @@ request / POST response)** run as a full client/SP flow, with every step visible
     **SubjectConfirmationData** expiry, **Audience** = SP Entity ID,
     **Recipient** = ACS URL, **InResponseTo** = the request ID); Step 4 shows
     the parsed assertion (Subject, AuthnStatement, Attributes).
+  - **Logout**: *SP-initiated Single Logout* builds a `LogoutRequest`
+    (NameID + SessionIndex, signed if signing is On), shows it, and — once
+    sent — validates the `LogoutResponse` that returns to `/saml/slo`
+    (set that URL as the client's Logout Service URL in the IdP).
+    *Local logout* contacts nobody, to show that the IdP session survives.
+- **Convenience**: field values are remembered in your browser and pre-filled
+  on the next visit (the SAML private key is never saved); **Reset
+  all inputs** on either page clears the fields and the saved copies. The
+  action buttons stay pinned in view while the input column scrolls.
 - A single Node/Express process with a handful of small dependencies
   (`express`, `jose`, `xml-crypto`, `@xmldom/xmldom`, `xpath`). No build
   step — `npm start` and you're running.
@@ -110,8 +123,8 @@ http://localhost:5555/callback
 - Runs are kept **in memory only**, with no database. Restarting the server
   clears history — a deliberate trade-off for staying lightweight.
 - SAML uses the **HTTP-Redirect** binding for the request and **HTTP-POST**
-  for the response. SP metadata generation and Single Logout are not
-  implemented.
+  for the response. SP metadata generation and IdP-initiated logout are not
+  implemented; the `LogoutResponse` signature is not verified.
 - SAML validation doesn't handle **encrypted assertions**
   (`<EncryptedAssertion>`) — only plain, signed (or unsigned) assertions.
 
