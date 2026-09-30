@@ -170,3 +170,7 @@ textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
 .btn:disabled{ opacity:.45; cursor:not-allowed; }
 .btn:disabled:hover{ background:var(--primary); }
 .btn.go:disabled:hover{ background:var(--ok); }
+
+/* Reset link at the top of the left column, above the first card */
+.layout-left.pinned .left-head{ flex:none; display:flex; justify-content:flex-end; padding:0 4px 6px; }
+.left-head .link-btn{ margin:0; }
