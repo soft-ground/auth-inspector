@@ -869,8 +869,9 @@ function buildOidcLogoutEntry(run) {
     title: 'Logout — single vs. SSO',
     badge: rv ? badge(!rv.error && rv.status >= 200 && rv.status < 300, 'Tokens revoked', 'Revoke failed') : '',
     body: `<div class="kv-title">Single logout — revoke tokens (this app only)</div>
-      <div class="note" style="margin-bottom:8px;">Back-channel call (RFC 7009) that invalidates this client's refresh token. The IdP's browser
-        session stays alive, so other apps — and this one, on the next login — are not signed out.</div>
+      <div class="note" style="margin-bottom:8px;">Back-channel call (RFC 7009) that invalidates this client's refresh token. What happens to the IdP's
+        browser session depends on the IdP: many keep it (a new login signs straight back in), but Keycloak removes this client's session
+        and, if it was the only client in the SSO session, the SSO session too — so the next login asks for credentials again.</div>
       ${revokeHtml}
       <div class="kv-title" style="margin-top:22px;">SSO logout — end the IdP session (RP-initiated)</div>
       ${end ? `<div class="note" style="margin-bottom:8px;">A browser redirect to the IdP's end-session endpoint (<code>end_session_endpoint</code> from discovery). It ends the IdP's SSO session, which signs
@@ -894,7 +895,7 @@ function oidcLogoutCard(run) {
       : `<p class="note" style="margin-top:10px;">SSO logout unavailable: no <code>end_session_endpoint</code> in the discovery document.</p>`}
     <details class="hint-details">
       <summary>What's the difference?</summary>
-      <p><b>Single</b> revokes only this client's tokens; the IdP session remains. <b>SSO</b> ends the IdP session itself,
+      <p><b>Single</b> revokes only this client's tokens; whether the IdP session survives depends on the IdP (Keycloak drops it when this was the only client in it). <b>SSO</b> ends the IdP session itself,
         so every app sharing it is signed out. See the Logout tab for the exact requests.</p>
     </details>
   </div>`;

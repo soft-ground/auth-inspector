@@ -20,7 +20,7 @@ request / POST response)** run as a full client/SP flow, with every step visible
     Step 5/6 (**ID/Access Token decode + JWKS signature verification +
     audience/nonce checks**), all on one report page.
   - **Logout**, both ways: *single logout* revokes this client's tokens
-    (RFC 7009 back-channel call; the IdP session survives), and *SSO logout*
+    (RFC 7009 back-channel call; whether the IdP session survives depends on the IdP — Keycloak also ends it when this was the only client in the session), and *SSO logout*
     sends the browser to the IdP's end-session endpoint (RP-initiated, with
     `id_token_hint`), which signs out every app sharing the IdP session.
 - **SAML** (this app acts as the Service Provider)
