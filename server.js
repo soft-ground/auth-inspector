@@ -286,13 +286,15 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
     };
     const audienceOk = expectedAudience ? conditions.audiences.includes(expectedAudience) : null;
     const recipientOk = expectedRecipient ? subject.recipient === expectedRecipient : null;
-    const inResponseToOk = expectedInResponseTo ? subject.inResponseTo === expectedInResponseTo : null;
+    const gotInResponseTo = subject.inResponseTo || xattr(responseNode, 'InResponseTo') || null;
+    const inResponseToAbsent = !!expectedInResponseTo && !gotInResponseTo;
+    const inResponseToOk = expectedInResponseTo && gotInResponseTo ? gotInResponseTo === expectedInResponseTo : null;
 
     assertion = {
       issuer, subject, conditions, authn, attributes, timing,
       timeValid: notBeforeOk && notOnOrAfterOk,
       confirmationValid: confirmationOk,
-      audienceOk, recipientOk, inResponseToOk,
+      audienceOk, recipientOk, inResponseToOk, inResponseToAbsent,
     };
   }
 
@@ -1107,7 +1109,9 @@ function buildSamlStepEntries(run) {
     entries.push({
       key: '3', label: 'Step 3',
       title: 'Validation — signature & conditions',
-      badge: badge(run.status === 'success', 'All checks passed', 'Checks failed'),
+      badge: run.status === 'success' && (a?.timing.usedSkew || a?.inResponseToAbsent)
+        ? '<span class="badge warn">Passed with warnings</span>'
+        : badge(run.status === 'success', 'All checks passed', 'Checks failed'),
       body: `<div class="badges" style="margin-top:0;">
           ${badge(d.anySignedAndValid, 'Signature valid', d.signatures.length ? 'Signature invalid' : 'Not signed')}
           ${d.status ? badge(d.status.code === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'Status: Success', 'Status: ' + (d.status.code || 'unknown')) : ''}
@@ -1115,7 +1119,7 @@ function buildSamlStepEntries(run) {
           ${a ? badge(a.confirmationValid, 'Confirmation not expired', 'Confirmation expired') : ''}
           ${a ? badge(a.audienceOk, 'Audience matches SP Entity ID', 'Audience mismatch') : ''}
           ${a ? badge(a.recipientOk, 'Recipient matches ACS URL', 'Recipient mismatch') : ''}
-          ${a ? badge(a.inResponseToOk, 'InResponseTo matches request', 'InResponseTo mismatch') : ''}
+          ${a ? (a.inResponseToAbsent ? '<span class="badge warn">InResponseTo absent — response is not tied to this request</span>' : badge(a.inResponseToOk, 'InResponseTo matches request', 'InResponseTo mismatch')) : ''}
         </div>
         ${sigRows}
         ${a ? `<div class="kv-title">Request matching</div>${kvTable({
