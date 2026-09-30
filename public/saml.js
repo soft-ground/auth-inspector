@@ -55,8 +55,10 @@ function bindPemFile(textareaId, fileInputId) {
     if (!file) return;
     if (file.size > 64 * 1024) { alert('That file is too large to be a PEM key/certificate.'); return; }
     const text = await file.text();
-    if (!text.includes('-----BEGIN')) {
-      alert('Expected a PEM text file (starting with -----BEGIN ...). Binary keystores (.p12/.jks/.der) must be converted to PEM first.');
+    const looksPem = text.includes('-----BEGIN');
+    const looksBareBase64 = /^[A-Za-z0-9+/=\s]+$/.test(text.trim());
+    if (!looksPem && !looksBareBase64) {
+      alert('Expected a PEM text file (-----BEGIN ...) or bare base64 text. Binary keystores (.p12/.jks/.der) must be converted first.');
       return;
     }
     ta.value = text.trim();
