@@ -561,6 +561,9 @@ function renderHome() {
 
   <div class="layout">
     <div class="layout-left pinned">
+      <div class="left-head">
+        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
+      </div>
       <div class="left-scroll">
       <div class="card">
         <div class="section-title"><h2>Connection</h2></div>
@@ -645,7 +648,6 @@ function renderHome() {
   <div class="action-bar">
     <button class="btn" id="startBtn">Generate authentication request →</button>
     <button class="btn go" id="goBtn" disabled>Send request →</button>
-    <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
   </div>
 </div>
 <script src="/static/home.js"></script>
@@ -661,6 +663,9 @@ function renderSamlHome() {
 
   <div class="layout">
     <div class="layout-left pinned">
+      <div class="left-head">
+        <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
+      </div>
       <div class="left-scroll">
       <div class="card">
         <div class="section-title"><h2>Identity Provider</h2></div>
@@ -750,7 +755,6 @@ function renderSamlHome() {
   <div class="action-bar">
     <button class="btn" id="startBtn">Generate SAMLRequest →</button>
     <button class="btn go" id="goBtn" disabled>Send request →</button>
-    <button class="link-btn" id="resetBtn" type="button">Reset all inputs</button>
   </div>
 </div>
 <script src="/static/saml.js"></script>
