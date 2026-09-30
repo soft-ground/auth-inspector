@@ -9,6 +9,7 @@ function escapeHtml(str) {
 function setupToggle(groupId, onChange) {
   const group = $(groupId);
   if (!group) return { get: () => null };
+  const storeKey = 'auth-inspector:toggle:' + groupId;
   let val = group.querySelector('button.active')?.dataset.val;
   group.querySelectorAll('button').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -16,8 +17,13 @@ function setupToggle(groupId, onChange) {
       btn.classList.add('active');
       val = btn.dataset.val;
       onChange?.(val);
+      try { localStorage.setItem(storeKey, val); } catch { /* storage unavailable */ }
     });
   });
+  let saved = null;
+  try { saved = localStorage.getItem(storeKey); } catch { /* storage unavailable */ }
+  const savedBtn = saved && group.querySelector(`button[data-val="${saved}"]`);
+  if (savedBtn) savedBtn.click();
   return { get: () => val };
 }
 
@@ -37,7 +43,9 @@ function showResult(tabKey, html) {
 }
 
 // ── Remember field values locally for convenience ─────────────────────────
-const FIELDS = ['issuer', 'clientId', 'scope', 'redirectUri', 'clientSecret'];
+const FIELDS = ['issuer', 'clientId', 'scope', 'redirectUri'];
+// The client secret used to be remembered; make sure no stale copy is left behind.
+try { localStorage.removeItem('auth-inspector:clientSecret'); } catch { /* storage unavailable */ }
 FIELDS.forEach((id) => {
   const saved = localStorage.getItem('auth-inspector:' + id);
   if (saved) $(id).value = saved;
@@ -173,6 +181,7 @@ $('resetBtn').addEventListener('click', () => {
   $('redirectUri').value = location.origin + '/callback';
   $('clientSecret').value = '';
   ['authToggle', 'authMethodToggle', 'pkceToggle', 'pkceMethodToggle'].forEach((id) => $(id).querySelector('button').click());
+  ['authToggle', 'authMethodToggle', 'pkceToggle', 'pkceMethodToggle'].forEach((id) => localStorage.removeItem('auth-inspector:toggle:' + id));
 
   document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => { b.style.display = 'none'; b.classList.remove('active'); });
   document.querySelectorAll('.tab-group .tab-panel').forEach((p) => { p.innerHTML = ''; p.classList.remove('active'); });

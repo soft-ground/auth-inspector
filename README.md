@@ -46,8 +46,8 @@ request / POST response)** run as a full client/SP flow, with every step visible
     sent — validates the `LogoutResponse` that returns to `/saml/slo`
     (set that URL as the client's Logout Service URL in the IdP).
     *Local logout* contacts nobody, to show that the IdP session survives.
-- **Convenience**: field values are remembered in your browser and pre-filled
-  on the next visit (the SAML private key is never saved); **Reset
+- **Convenience**: field values and option switches are remembered in your browser and
+  pre-filled on the next visit (client secrets and private keys are never saved); **Reset
   all inputs** on either page clears the fields and the saved copies. The
   action buttons stay pinned in view while the input column scrolls.
 - A single Node/Express process with a handful of small dependencies

@@ -8,6 +8,7 @@ function escapeHtml(str) {
 
 function setupToggle(groupId, onChange) {
   const group = $(groupId);
+  const storeKey = 'auth-inspector:saml:toggle:' + groupId;
   let val = group.querySelector('button.active')?.dataset.val;
   group.querySelectorAll('button').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -15,8 +16,13 @@ function setupToggle(groupId, onChange) {
       btn.classList.add('active');
       val = btn.dataset.val;
       onChange?.(val);
+      try { localStorage.setItem(storeKey, val); } catch { /* storage unavailable */ }
     });
   });
+  let saved = null;
+  try { saved = localStorage.getItem(storeKey); } catch { /* storage unavailable */ }
+  const savedBtn = saved && group.querySelector(`button[data-val="${saved}"]`);
+  if (savedBtn) savedBtn.click();
   return { get: () => val };
 }
 
@@ -191,6 +197,7 @@ $('resetBtn').addEventListener('click', () => {
   $('acsUrl').value = location.origin + '/saml/acs';
   $('nameIdFormat').value = '';
   ['forceAuthnToggle', 'signToggle'].forEach((id) => $(id).querySelector('button').click());
+  ['forceAuthnToggle', 'signToggle'].forEach((id) => localStorage.removeItem('auth-inspector:saml:toggle:' + id));
 
   document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => { b.style.display = 'none'; b.classList.remove('active'); });
   document.querySelectorAll('.tab-group .tab-panel').forEach((p) => { p.innerHTML = ''; p.classList.remove('active'); });
