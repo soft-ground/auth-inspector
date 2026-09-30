@@ -151,3 +151,8 @@ textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
   .layout-left.pinned{ max-height:none; }
   .layout-left.pinned .left-scroll{ overflow:visible; }
 }
+
+.btn.go{ background:var(--ok); }
+.btn.go:hover{ background:#15694a; }
+.secret:not(.mask){ word-break:break-all; }
+.secret:not(.mask)::after{ content:" 🙈"; opacity:.6; }
