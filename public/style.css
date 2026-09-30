@@ -144,7 +144,6 @@ textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
 /* Left column: inputs scroll inside it, action buttons stay pinned in view */
 .layout-left.pinned{ display:flex; flex-direction:column; max-height:calc(100vh - 40px); }
 .layout-left.pinned .left-scroll{ flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding-right:4px; }
-.layout-left.pinned .left-actions{ flex:none; padding-top:12px; }
 .link-btn{ display:block; margin:10px auto 0; background:none; border:none; padding:2px 6px; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; }
 .link-btn:hover{ color:var(--bad); }
 @media (max-width:900px){
@@ -158,3 +157,16 @@ textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
 .secret:not(.mask)::after{ content:" 🙈"; opacity:.6; }
 
 .badge.warn{ background:#fff4e0; color:#a15c00; }
+
+/* Footer: Generate + Send side by side, pinned under both columns */
+.action-bar{
+  position:sticky; bottom:0; z-index:5; margin-top:14px; padding:12px 0;
+  display:flex; align-items:center; gap:12px;
+  background:var(--bg); border-top:1px solid var(--border);
+  box-shadow:0 -10px 12px -10px rgba(16,24,40,.12);
+}
+.action-bar .btn{ flex:1; padding:13px 18px; font-size:15px; }
+.action-bar .link-btn{ flex:none; margin:0; }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+.btn:disabled:hover{ background:var(--primary); }
+.btn.go:disabled:hover{ background:var(--ok); }

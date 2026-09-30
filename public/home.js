@@ -151,7 +151,7 @@ $('startBtn').addEventListener('click', async () => {
     </div>
   `);
 
-  $('goBtn').style.display = '';
+  $('goBtn').disabled = false;
 });
 
 // Opens in a new tab rather than navigating this one away: the IdP's login
@@ -177,6 +177,6 @@ $('resetBtn').addEventListener('click', () => {
   document.querySelectorAll('#resultTabs .tab-btn').forEach((b) => { b.style.display = 'none'; b.classList.remove('active'); });
   document.querySelectorAll('.tab-group .tab-panel').forEach((p) => { p.innerHTML = ''; p.classList.remove('active'); });
   $('resultsPlaceholder').style.display = '';
-  $('goBtn').style.display = 'none';
+  $('goBtn').disabled = true;
   lastAuthUrl = null;
 });
