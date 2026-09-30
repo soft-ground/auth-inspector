@@ -76,12 +76,18 @@ input[type=text], input[type=password], select, textarea{
 }
 textarea{ resize:vertical; line-height:1.4; }
 input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(91,91,230,.15); }
-.toggle-group{ display:flex; gap:8px; }
+/* Option switches: a segmented control (gray track, raised white "pill" for the
+   selected value) so they read as settings, not as filled action buttons. */
+.toggle-group{ display:flex; gap:2px; padding:3px; background:#eceef3; border-radius:10px; }
 .toggle-group button{
-  flex:1; padding:9px 10px; border:1px solid var(--border); background:#fff; border-radius:8px;
-  cursor:pointer; font-size:13px; font-weight:600; color:var(--muted);
+  flex:1; padding:7px 10px; border:none; background:transparent; border-radius:8px;
+  cursor:pointer; font-size:12.5px; font-weight:600; color:var(--muted);
 }
-.toggle-group button.active{ background:var(--primary); border-color:var(--primary); color:#fff; }
+.toggle-group button:hover{ color:var(--ink); }
+.toggle-group button.active{
+  background:#fff; color:var(--primary);
+  box-shadow:0 1px 2px rgba(16,24,40,.18), 0 0 0 1px rgba(91,91,230,.28);
+}
 .btn{ display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:11px 20px; border-radius:9px; border:none;
   background:var(--primary); color:#fff; font-weight:700; font-size:14px; cursor:pointer; }
 .btn:hover{ background:var(--primary-hover); }
@@ -137,7 +143,7 @@ a{ color:var(--primary); }
 
 /* Choose-file / drop target next to PEM textareas */
 .file-row{ display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted); margin-top:6px; }
-.file-pick{ padding:4px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--ink); font-weight:600; font-size:12px; cursor:pointer; }
+.file-pick{ white-space:nowrap; padding:4px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--ink); font-weight:600; font-size:12px; cursor:pointer; }
 .file-pick:hover{ border-color:var(--primary); color:var(--primary); }
 textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }
 
