@@ -134,3 +134,9 @@ table.runs code{ font-family:var(--mono); }
 .kv-title{ font-size:12.5px; font-weight:700; margin:14px 0 2px; }
 .kv-title:first-of-type{ margin-top:4px; }
 a{ color:var(--primary); }
+
+/* Choose-file / drop target next to PEM textareas */
+.file-row{ display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted); margin-top:6px; }
+.file-pick{ padding:4px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--ink); font-weight:600; font-size:12px; cursor:pointer; }
+.file-pick:hover{ border-color:var(--primary); color:var(--primary); }
+textarea.drag-over{ border-color:var(--primary); background:#f3f3ff; }

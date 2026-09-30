@@ -543,6 +543,7 @@ function renderSamlHome() {
         <div class="field">
           <label>IdP signing certificate (PEM) <span class="hint">used to verify the Response/Assertion signature</span></label>
           <textarea id="cert" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          <div class="file-row"><label class="file-pick">Choose file…<input type="file" id="certFile" hidden></label><span>or drag a .pem/.crt file onto the box</span></div>
         </div>
       </div>
 
@@ -585,6 +586,7 @@ function renderSamlHome() {
           </div>
           <div id="signOnFields" style="display:none; margin-top:12px;">
             <textarea id="spPrivateKey" rows="5" placeholder="SP private key (PEM, RSA)&#10;-----BEGIN PRIVATE KEY-----"></textarea>
+            <div class="file-row"><label class="file-pick">Choose file…<input type="file" id="spPrivateKeyFile" hidden></label><span>or drag a .pem/.key file onto the box</span></div>
           </div>
           <details class="hint-details">
             <summary>Why?</summary>
