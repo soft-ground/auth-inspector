@@ -9,7 +9,9 @@ request / POST response)** run as a full client/SP flow, with every step visible
 
 ## Features
 
-- **OIDC**
+- **OIDC** (works with any standards-compliant IdP: every endpoint — authorization,
+  token, JWKS, revocation, end-session — is read from the discovery document at
+  `{issuer}/.well-known/openid-configuration`, not assumed from a vendor path)
   - **Client authentication (Authorization) On/Off**, with a **Body vs.
     Header** delivery-method switch for the client secret.
   - **PKCE On/Off** (S256/plain).
