@@ -37,6 +37,10 @@ request / POST response)** run as a full client/SP flow, with every step visible
     **SubjectConfirmationData** expiry, **Audience** = SP Entity ID,
     **Recipient** = ACS URL, **InResponseTo** = the request ID); Step 4 shows
     the parsed assertion (Subject, AuthnStatement, Attributes).
+  - Time checks are explained, not just pass/fail: Step 3 shows when validation
+    ran, the estimated clock offset against the assertion's `IssueInstant`, and how
+    far `NotBefore`/`NotOnOrAfter` are from now. An optional **clock skew
+    tolerance** (seconds) covers a machine clock that drifts from the IdP's.
   - **Logout**: *SP-initiated Single Logout* builds a `LogoutRequest`
     (NameID + SessionIndex, signed if signing is On), shows it, and — once
     sent — validates the `LogoutResponse` that returns to `/saml/slo`

@@ -39,7 +39,7 @@ function renderKv(obj) {
 }
 
 // ── Remember field values locally for convenience (private key is never stored) ──
-const FIELDS = ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'acsUrl', 'nameIdFormat'];
+const FIELDS = ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'acsUrl', 'nameIdFormat', 'clockSkew'];
 FIELDS.forEach((id) => {
   const saved = localStorage.getItem('auth-inspector:saml:' + id);
   if (saved) $(id).value = saved;
@@ -134,6 +134,7 @@ $('startBtn').addEventListener('click', async () => {
     nameIdFormat: $('nameIdFormat').value,
     forceAuthn: forceAuthnToggle.get() === 'on',
     signOn: signToggle.get() === 'on',
+    clockSkewSec: $('clockSkew').value.trim(),
     spPrivateKey: $('spPrivateKey').value.trim(),
   };
   if (!payload.ssoUrl || !payload.spEntityId || !payload.acsUrl) {
@@ -187,7 +188,7 @@ $('goBtn').addEventListener('click', () => {
 $('resetBtn').addEventListener('click', () => {
   if (!confirm('Clear all inputs and the values saved in this browser?')) return;
   FIELDS.forEach((id) => localStorage.removeItem('auth-inspector:saml:' + id));
-  ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'spPrivateKey'].forEach((id) => { $(id).value = ''; });
+  ['metadataUrl', 'ssoUrl', 'cert', 'spEntityId', 'spPrivateKey', 'clockSkew'].forEach((id) => { $(id).value = ''; });
   $('acsUrl').value = location.origin + '/saml/acs';
   $('nameIdFormat').value = '';
   ['forceAuthnToggle', 'signToggle'].forEach((id) => $(id).querySelector('button').click());

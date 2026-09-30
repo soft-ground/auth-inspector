@@ -188,7 +188,7 @@ function verifySamlSignature(signatureNode, xmlString, cert) {
   }
 }
 
-function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, expectedInResponseTo }) {
+function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, expectedInResponseTo, clockSkewSec = 0 }) {
   const xmlString = decodeSamlInput(raw);
 
   const parseErrors = [];
@@ -257,15 +257,33 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, 
     })) : [];
 
     const now = new Date();
-    const notBeforeOk = !conditions.notBefore || now >= new Date(conditions.notBefore);
-    const notOnOrAfterOk = !conditions.notOnOrAfter || now < new Date(conditions.notOnOrAfter);
-    const confirmationOk = !subject.notOnOrAfter || now < new Date(subject.notOnOrAfter);
+    const skewMs = clockSkewSec * 1000;
+    const secs = (ms) => Math.round(ms) / 1000;
+    const nbMs = conditions.notBefore ? new Date(conditions.notBefore).getTime() : null;
+    const noaMs = conditions.notOnOrAfter ? new Date(conditions.notOnOrAfter).getTime() : null;
+    const confMs = subject.notOnOrAfter ? new Date(subject.notOnOrAfter).getTime() : null;
+    const issueInstant = xattr(assertionNode, 'IssueInstant') || xattr(responseNode, 'IssueInstant');
+    const issueMs = issueInstant ? new Date(issueInstant).getTime() : null;
+    const notBeforeOk = nbMs === null || now.getTime() + skewMs >= nbMs;
+    const notOnOrAfterOk = noaMs === null || now.getTime() - skewMs < noaMs;
+    const confirmationOk = confMs === null || now.getTime() - skewMs < confMs;
+    // Positive "Since"/"Left" means comfortably inside the window; the offset is
+    // this server's clock minus the IdP's (plus network delay, well under a second).
+    const timing = {
+      validatedAt: now.toISOString(),
+      issueInstant,
+      offsetSec: issueMs === null ? null : secs(now.getTime() - issueMs),
+      notBeforeSinceSec: nbMs === null ? null : secs(now.getTime() - nbMs),
+      notOnOrAfterLeftSec: noaMs === null ? null : secs(noaMs - now.getTime()),
+      confirmationLeftSec: confMs === null ? null : secs(confMs - now.getTime()),
+      skewSec: clockSkewSec,
+    };
     const audienceOk = expectedAudience ? conditions.audiences.includes(expectedAudience) : null;
     const recipientOk = expectedRecipient ? subject.recipient === expectedRecipient : null;
     const inResponseToOk = expectedInResponseTo ? subject.inResponseTo === expectedInResponseTo : null;
 
     assertion = {
-      issuer, subject, conditions, authn, attributes,
+      issuer, subject, conditions, authn, attributes, timing,
       timeValid: notBeforeOk && notOnOrAfterOk,
       confirmationValid: confirmationOk,
       audienceOk, recipientOk, inResponseToOk,
@@ -686,6 +704,10 @@ function renderSamlHome() {
       <div class="card">
         <div class="section-title"><h2>Security options</h2></div>
         <div class="field">
+          <label>Clock skew tolerance (seconds) <span class="hint">how far this machine's clock may differ from the IdP's when checking NotBefore / NotOnOrAfter</span></label>
+          <input type="text" id="clockSkew" inputmode="numeric" placeholder="0">
+        </div>
+        <div class="field">
           <label>Sign AuthnRequest</label>
           <div class="toggle-group" id="signToggle">
             <button type="button" data-val="off" class="active">Off</button>
@@ -977,9 +999,20 @@ function renderReport(run) {
   return page('Test report', html);
 }
 
+function timeBadText(t) {
+  if (t.notBeforeSinceSec !== null && t.notBeforeSinceSec < -t.skewSec) {
+    return `Not yet valid — NotBefore is ${(-t.notBeforeSinceSec).toFixed(1)} s ahead of this server`;
+  }
+  if (t.notOnOrAfterLeftSec !== null && t.notOnOrAfterLeftSec <= -t.skewSec) {
+    return `Expired — NotOnOrAfter passed ${(-t.notOnOrAfterLeftSec).toFixed(1)} s ago`;
+  }
+  return 'Outside Conditions window';
+}
+
 function buildSamlStepEntries(run) {
   const entries = [];
   const rawPre = (s) => `<pre>${escapeHtml(s)}</pre>`;
+  const fmt = (n) => (Math.abs(n) >= 100 ? Math.round(n) : n.toFixed(1)) + ' s';
 
   entries.push({
     key: '1', label: 'Step 1',
@@ -1024,13 +1057,21 @@ function buildSamlStepEntries(run) {
       body: `<div class="badges" style="margin-top:0;">
           ${badge(d.anySignedAndValid, 'Signature valid', d.signatures.length ? 'Signature invalid' : 'Not signed')}
           ${d.status ? badge(d.status.code === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'Status: Success', 'Status: ' + (d.status.code || 'unknown')) : ''}
-          ${a ? badge(a.timeValid, 'Within Conditions window', 'Expired / not yet valid') : ''}
+          ${a ? badge(a.timeValid, 'Within Conditions window', timeBadText(a.timing)) : ''}
           ${a ? badge(a.confirmationValid, 'Confirmation not expired', 'Confirmation expired') : ''}
           ${a ? badge(a.audienceOk, 'Audience matches SP Entity ID', 'Audience mismatch') : ''}
           ${a ? badge(a.recipientOk, 'Recipient matches ACS URL', 'Recipient mismatch') : ''}
           ${a ? badge(a.inResponseToOk, 'InResponseTo matches request', 'InResponseTo mismatch') : ''}
         </div>
-        ${sigRows}`,
+        ${sigRows}
+        ${a ? `<div class="kv-title">Timing (checked against this server's clock)</div>${kvTable(Object.fromEntries([
+          ['Validated at (UTC)', a.timing.validatedAt],
+          ['Assertion IssueInstant (IdP clock)', a.timing.issueInstant],
+          ['Clock offset, this server − IdP', a.timing.offsetSec === null ? null : `${a.timing.offsetSec >= 0 ? '+' : ''}${fmt(a.timing.offsetSec)} (≈ skew + network delay)`],
+          ['Conditions NotBefore', a.timing.notBeforeSinceSec === null ? null : `${a.conditions.notBefore} — ${a.timing.notBeforeSinceSec >= 0 ? 'started ' + fmt(a.timing.notBeforeSinceSec) + ' ago' : 'starts in ' + fmt(-a.timing.notBeforeSinceSec)}`],
+          ['Conditions NotOnOrAfter', a.timing.notOnOrAfterLeftSec === null ? null : `${a.conditions.notOnOrAfter} — ${a.timing.notOnOrAfterLeftSec > 0 ? fmt(a.timing.notOnOrAfterLeftSec) + ' left' : 'passed ' + fmt(-a.timing.notOnOrAfterLeftSec) + ' ago'}`],
+          ['Clock skew tolerance', fmt(a.timing.skewSec)],
+        ].filter(([, v]) => v !== null)))}` : ''}`,
     });
 
     if (a) {
@@ -1379,7 +1420,7 @@ app.post('/saml/discover', async (req, res) => {
 
 // Step 1: build the AuthnRequest and the redirect URL. Nothing is sent yet.
 app.post('/saml/start', (req, res) => {
-  const { ssoUrl, cert, spEntityId, acsUrl, nameIdFormat, forceAuthn, signOn, spPrivateKey } = req.body || {};
+  const { ssoUrl, cert, spEntityId, acsUrl, nameIdFormat, forceAuthn, signOn, spPrivateKey, clockSkewSec } = req.body || {};
   if (!ssoUrl || !spEntityId || !acsUrl) {
     return res.status(400).json({ error: 'IdP SSO URL, SP Entity ID, and ACS URL are required.' });
   }
@@ -1412,6 +1453,7 @@ app.post('/saml/start', (req, res) => {
     config: {
       ssoUrl, cert: normalizeCert(cert), spEntityId, acsUrl,
       nameIdFormat: nameIdFormat || '', forceAuthn: !!forceAuthn, signOn: !!signOn,
+      clockSkewSec: Math.min(3600, Math.max(0, Number(clockSkewSec) || 0)),
     },
     requestId,
     privateKey: keyObj,
@@ -1447,6 +1489,7 @@ app.post('/saml/acs', (req, res) => {
         expectedAudience: run.config.spEntityId,
         expectedRecipient: run.config.acsUrl,
         expectedInResponseTo: run.requestId,
+        clockSkewSec: run.config.clockSkewSec,
       });
       const a = run.step3.assertion;
       const ok = run.step3.anySignedAndValid && a && a.timeValid && a.confirmationValid &&
