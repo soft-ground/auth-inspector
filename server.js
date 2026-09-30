@@ -19,6 +19,7 @@
 
 import express from 'express';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { jwtVerify, createRemoteJWKSet } from 'jose';
@@ -31,16 +32,21 @@ const app = express();
 const PORT = process.env.PORT || 5555;
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use('/static', express.static(path.join(__dirname, 'public')));
 
 // ── In-memory run store (state -> run record) ──────────────────────────
 const runs = new Map();
+const samlRuns = new Map(); // RelayState -> SAML run record
 const RUN_TTL_MS = 30 * 60 * 1000; // clean up after 30 minutes
 
 setInterval(() => {
   const now = Date.now();
   for (const [state, run] of runs) {
     if (now - run.createdAt > RUN_TTL_MS) runs.delete(state);
+  }
+  for (const [id, run] of samlRuns) {
+    if (now - run.createdAt > RUN_TTL_MS) samlRuns.delete(id);
   }
 }, 5 * 60 * 1000).unref();
 
@@ -167,7 +173,7 @@ function verifySamlSignature(signatureNode, xmlString, cert) {
   }
 }
 
-function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient }) {
+function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient, expectedInResponseTo }) {
   const xmlString = decodeSamlInput(raw);
 
   const parseErrors = [];
@@ -241,12 +247,13 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient }
     const confirmationOk = !subject.notOnOrAfter || now < new Date(subject.notOnOrAfter);
     const audienceOk = expectedAudience ? conditions.audiences.includes(expectedAudience) : null;
     const recipientOk = expectedRecipient ? subject.recipient === expectedRecipient : null;
+    const inResponseToOk = expectedInResponseTo ? subject.inResponseTo === expectedInResponseTo : null;
 
     assertion = {
       issuer, subject, conditions, authn, attributes,
       timeValid: notBeforeOk && notOnOrAfterOk,
       confirmationValid: confirmationOk,
-      audienceOk, recipientOk,
+      audienceOk, recipientOk, inResponseToOk,
     };
   }
 
@@ -263,6 +270,63 @@ function parseAndValidateSaml({ raw, cert, expectedAudience, expectedRecipient }
     assertion,
     signatures: signatureResults,
     anySignedAndValid: signatureResults.length > 0 && signatureResults.every((s) => s.verified),
+  };
+}
+
+// ── SAML AuthnRequest (SP-initiated, HTTP-Redirect binding) ───────────────
+function xmlEscape(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;',
+  }[c]));
+}
+
+function buildAuthnRequestXml({ id, issueInstant, destination, acsUrl, spEntityId, nameIdFormat, forceAuthn }) {
+  return `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"` +
+    ` ID="${xmlEscape(id)}" Version="2.0" IssueInstant="${issueInstant}"` +
+    ` Destination="${xmlEscape(destination)}"` +
+    ` ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"` +
+    ` AssertionConsumerServiceURL="${xmlEscape(acsUrl)}"` +
+    (forceAuthn ? ` ForceAuthn="true"` : '') + `>` +
+    `<saml:Issuer>${xmlEscape(spEntityId)}</saml:Issuer>` +
+    (nameIdFormat ? `<samlp:NameIDPolicy Format="${xmlEscape(nameIdFormat)}" AllowCreate="true"/>` : '') +
+    `</samlp:AuthnRequest>`;
+}
+
+// Redirect binding: raw DEFLATE -> base64 -> URL-encode. When signing, the
+// signature covers the exact query string "SAMLRequest=..&RelayState=..&SigAlg=..".
+function buildRedirectUrl({ ssoUrl, requestXml, relayState, privateKey }) {
+  const samlRequest = zlib.deflateRawSync(Buffer.from(requestXml, 'utf8')).toString('base64');
+  const params = { SAMLRequest: samlRequest, RelayState: relayState };
+  let signed = false;
+  if (privateKey) {
+    const sigAlg = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256';
+    const signedQuery = new URLSearchParams({ ...params, SigAlg: sigAlg }).toString();
+    const signature = crypto.createSign('RSA-SHA256').update(signedQuery).sign(privateKey, 'base64');
+    params.SigAlg = sigAlg;
+    params.Signature = signature;
+    signed = true;
+  }
+  const query = new URLSearchParams(params).toString();
+  const url = ssoUrl + (ssoUrl.includes('?') ? '&' : '?') + query;
+  return { url, params, samlRequestB64: samlRequest, signed };
+}
+
+// Pulls the Redirect-binding SSO URL and signing cert out of IdP metadata.
+function parseIdpMetadata(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  const root = doc.documentElement;
+  if (!root) throw new Error('No root element found in metadata.');
+  const ssoNodes = xall(root, 'SingleSignOnService');
+  const redirect = ssoNodes.find((n) => (xattr(n, 'Binding') || '').endsWith('HTTP-Redirect')) || ssoNodes[0];
+  const certNode = xall(root, 'KeyDescriptor').find((k) => xattr(k, 'use') !== 'encryption');
+  const certB64 = certNode ? xtext(xall(certNode, 'X509Certificate')[0]) : null;
+  return {
+    entityId: xattr(root, 'entityID'),
+    ssoUrl: xattr(redirect, 'Location'),
+    ssoBinding: xattr(redirect, 'Binding'),
+    cert: certB64
+      ? `-----BEGIN CERTIFICATE-----\n${certB64.replace(/\s+/g, '').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----`
+      : null,
   };
 }
 
@@ -457,47 +521,82 @@ function renderHome() {
 }
 
 function renderSamlHome() {
-  return page('SAML validator', `
+  return page('SAML test', `
 <div class="wrap">
-  <h1>SAML Response validator
-    <small>Paste a SAML Response (raw XML, or base64 like the browser sends in the SAMLResponse POST field) and validate its signature, timing conditions, and audience — right here, without this app acting as a real Service Provider.</small>
+  <h1>SAML SP-initiated login test
+    <small>Act as a SAML Service Provider: fill in the values on the left, generate the SAMLRequest (AuthnRequest), send it to the IdP, and watch the response come back to the ACS URL and get validated.</small>
   </h1>
 
   <div class="layout">
     <div class="layout-left">
       <div class="card">
-        <div class="section-title"><h2>SAML Response</h2></div>
+        <div class="section-title"><h2>Identity Provider</h2></div>
         <div class="field">
-          <label>SAMLResponse <span class="hint">raw XML, or base64 — e.g. copy the SAMLResponse form field from the IdP's POST to your ACS endpoint</span></label>
-          <textarea id="samlInput" rows="10" placeholder="&lt;samlp:Response ...&gt;...&lt;/samlp:Response&gt;&#10;or base64: PHNhbWxwOl..."></textarea>
+          <label>IdP metadata URL <span class="hint">optional — e.g. http://localhost:24080/realms/dev/protocol/saml/descriptor</span></label>
+          <input type="text" id="metadataUrl" placeholder="http://localhost:24080/realms/dev/protocol/saml/descriptor">
+        </div>
+        <button class="btn block" id="discoverBtn" type="button" style="margin-bottom:14px;">Fetch metadata →</button>
+        <div class="field">
+          <label>IdP SSO URL <span class="hint">where the SAMLRequest is sent (HTTP-Redirect binding)</span></label>
+          <input type="text" id="ssoUrl" placeholder="http://localhost:24080/realms/dev/protocol/saml">
+        </div>
+        <div class="field">
+          <label>IdP signing certificate (PEM) <span class="hint">used to verify the Response/Assertion signature</span></label>
+          <textarea id="cert" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
         </div>
       </div>
 
       <div class="card">
-        <div class="section-title"><h2>Verification options</h2></div>
+        <div class="section-title"><h2>Service Provider (this app)</h2></div>
         <div class="field">
-          <label>IdP signing certificate (PEM) <span class="hint">used to verify the XML-DSig signature — from the IdP's metadata or, on Keycloak, the realm's signing key</span></label>
-          <textarea id="cert" rows="7" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          <label>SP Entity ID <span class="hint">sent as the AuthnRequest Issuer; must match the IdP client's Client ID</span></label>
+          <input type="text" id="spEntityId" placeholder="auth-inspector-saml">
         </div>
         <div class="field">
-          <label>Expected Audience <span class="hint">optional — your SP Entity ID, checked against Conditions/AudienceRestriction</span></label>
-          <input type="text" id="audience" placeholder="https://your-sp.example.com/metadata">
+          <label>ACS URL <span class="hint">must be a registered Valid redirect URI on the IdP client</span></label>
+          <input type="text" id="acsUrl" placeholder="">
         </div>
         <div class="field">
-          <label>Expected Recipient <span class="hint">optional — your ACS URL, checked against SubjectConfirmationData</span></label>
-          <input type="text" id="recipient" placeholder="https://your-sp.example.com/acs">
+          <label>NameID Format</label>
+          <select id="nameIdFormat">
+            <option value="">(unspecified — let the IdP decide)</option>
+            <option value="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">emailAddress</option>
+            <option value="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent">persistent</option>
+            <option value="urn:oasis:names:tc:SAML:2.0:nameid-format:transient">transient</option>
+            <option value="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">unspecified</option>
+          </select>
         </div>
-        <details class="hint-details">
-          <summary>What this does (and doesn't do)</summary>
-          <p>This validates a SAML Response you already have — it does not act as a Service Provider: no AuthnRequest
-            is generated, and there's no ACS endpoint to redirect an IdP to. Paste a response captured from a real
-            login (e.g. via your browser's dev tools) and this checks the XML-DSig signature on the Response and/or
-            Assertion, the Conditions time window, SubjectConfirmationData, and (if supplied) the Audience/Recipient
-            you expect.</p>
-        </details>
+        <div class="field">
+          <label>ForceAuthn <span class="hint">make the IdP re-authenticate even if a session exists</span></label>
+          <div class="toggle-group" id="forceAuthnToggle">
+            <button type="button" data-val="off" class="active">Off</button>
+            <button type="button" data-val="on">On</button>
+          </div>
+        </div>
       </div>
 
-      <button class="btn block" id="validateBtn" style="font-size:16px; padding:14px;">Validate response →</button>
+      <div class="card">
+        <div class="section-title"><h2>Security options</h2></div>
+        <div class="field">
+          <label>Sign AuthnRequest</label>
+          <div class="toggle-group" id="signToggle">
+            <button type="button" data-val="off" class="active">Off</button>
+            <button type="button" data-val="on">On</button>
+          </div>
+          <div id="signOnFields" style="display:none; margin-top:12px;">
+            <textarea id="spPrivateKey" rows="5" placeholder="SP private key (PEM, RSA)&#10;-----BEGIN PRIVATE KEY-----"></textarea>
+          </div>
+          <details class="hint-details">
+            <summary>Why?</summary>
+            <p>When On, the redirect URL carries <code>SigAlg</code> and <code>Signature</code> (RSA-SHA256 over the
+              query string), as the HTTP-Redirect binding requires. The private key stays on the server and never
+              appears in the request. The IdP needs the matching SP certificate to verify it.</p>
+          </details>
+        </div>
+      </div>
+
+      <button class="btn block" id="startBtn" style="font-size:16px; padding:14px;">Generate SAMLRequest →</button>
+      <button class="btn block secondary" id="goBtn" style="display:none; margin-top:10px;">Send request →</button>
     </div>
 
     <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
@@ -505,16 +604,12 @@ function renderSamlHome() {
     <div class="layout-right">
       <div class="card tab-group">
         <div class="tabs" id="resultTabs">
-          <button class="tab-btn" data-tab="overview" id="tabBtnOverview" style="display:none;">Overview</button>
-          <button class="tab-btn" data-tab="signature" id="tabBtnSignature" style="display:none;">Signature</button>
-          <button class="tab-btn" data-tab="assertion" id="tabBtnAssertion" style="display:none;">Assertion</button>
-          <button class="tab-btn" data-tab="raw" id="tabBtnRaw" style="display:none;">Raw XML</button>
+          <button class="tab-btn" data-tab="metadata" id="tabBtnMetadata" style="display:none;">Metadata</button>
+          <button class="tab-btn" data-tab="step1" id="tabBtnStep1" style="display:none;">Step 1</button>
         </div>
-        <div class="placeholder" id="resultsPlaceholder">Paste a SAML Response on the left and click Validate to see the parsed result here.</div>
-        <div class="tab-panel" data-tab="overview" id="tabPanelOverview"></div>
-        <div class="tab-panel" data-tab="signature" id="tabPanelSignature"></div>
-        <div class="tab-panel" data-tab="assertion" id="tabPanelAssertion"></div>
-        <div class="tab-panel" data-tab="raw" id="tabPanelRaw"></div>
+        <div class="placeholder" id="resultsPlaceholder">Run a step on the left to see its request/response here.</div>
+        <div class="tab-panel" data-tab="metadata" id="tabPanelMetadata"></div>
+        <div class="tab-panel" data-tab="step1" id="tabPanelStep1"></div>
       </div>
     </div>
   </div>
@@ -633,6 +728,9 @@ const STATUS_BADGE = {
   no_code: () => badge(false, '', 'No code'),
   token_error: () => badge(false, '', 'Token error'),
   fetch_error: () => badge(false, '', 'Network error'),
+  validation_failed: () => badge(false, '', 'Validation failed'),
+  parse_error: () => badge(false, '', 'Parse error'),
+  no_response: () => badge(false, '', 'No SAMLResponse'),
 };
 
 function renderReport(run) {
@@ -698,6 +796,141 @@ function renderReport(run) {
   </div>`;
 
   return page('Test report', html);
+}
+
+function buildSamlStepEntries(run) {
+  const entries = [];
+  const rawPre = (s) => `<pre>${escapeHtml(s)}</pre>`;
+
+  entries.push({
+    key: '1', label: 'Step 1',
+    title: 'SAMLRequest — browser → IdP (HTTP-Redirect binding, no CORS involved)',
+    badge: run.step1.signed ? badge(true, 'Signed') : `<span class="badge muted">Unsigned</span>`,
+    body: `<div class="kv-title">AuthnRequest XML (before deflate + base64)</div>${rawPre(run.step1.xml)}
+      <div class="kv-title">Query parameters</div>${kvTable(run.step1.params)}
+      <div class="note" style="margin-top:10px; word-break:break-all;">Full URL: <code>${escapeHtml(run.step1.url)}</code></div>`,
+  });
+
+  if (run.step2) {
+    const b = run.step2.body;
+    entries.push({
+      key: '2', label: 'Step 2',
+      title: 'SAMLResponse — IdP → ACS (HTTP-POST binding)',
+      badge: b.SAMLResponse ? badge(true, 'Response received') : badge(false, '', 'No SAMLResponse'),
+      body: `<div class="kv-title">Form fields</div>${kvTable(
+        Object.fromEntries(Object.entries(b).map(([k, v]) => [k, k === 'SAMLResponse' ? `${String(v).length} chars (base64)` : v]))
+      )}
+      ${run.step3?.xml ? `<div class="kv-title">Decoded Response XML</div>${rawPre(run.step3.xml)}` : ''}`,
+    });
+  }
+
+  if (run.step3?.error) {
+    entries.push({
+      key: '3', label: 'Step 3', title: 'Validation', badge: badge(false, '', 'Could not parse'),
+      body: `<div class="note">${escapeHtml(run.step3.error)}</div>`,
+    });
+  } else if (run.step3) {
+    const d = run.step3;
+    const a = d.assertion;
+    const sigRows = d.signatures.length
+      ? d.signatures.map((s) => `<div class="kv-title">${escapeHtml(s.scope)} signature</div>
+          <div class="badges">${badge(s.verified, 'Verified', 'Invalid')}</div>
+          ${!s.verified && s.error ? `<div class="note" style="margin-top:8px;">${escapeHtml(s.error)}</div>` : ''}`).join('')
+      : `<div class="note">No &lt;Signature&gt; on the Response or Assertion — the response is unsigned.</div>`;
+
+    entries.push({
+      key: '3', label: 'Step 3',
+      title: 'Validation — signature & conditions',
+      badge: badge(run.status === 'success', 'All checks passed', 'Checks failed'),
+      body: `<div class="badges" style="margin-top:0;">
+          ${badge(d.anySignedAndValid, 'Signature valid', d.signatures.length ? 'Signature invalid' : 'Not signed')}
+          ${d.status ? badge(d.status.code === 'urn:oasis:names:tc:SAML:2.0:status:Success', 'Status: Success', 'Status: ' + (d.status.code || 'unknown')) : ''}
+          ${a ? badge(a.timeValid, 'Within Conditions window', 'Expired / not yet valid') : ''}
+          ${a ? badge(a.confirmationValid, 'Confirmation not expired', 'Confirmation expired') : ''}
+          ${a ? badge(a.audienceOk, 'Audience matches SP Entity ID', 'Audience mismatch') : ''}
+          ${a ? badge(a.recipientOk, 'Recipient matches ACS URL', 'Recipient mismatch') : ''}
+          ${a ? badge(a.inResponseToOk, 'InResponseTo matches request', 'InResponseTo mismatch') : ''}
+        </div>
+        ${sigRows}`,
+    });
+
+    if (a) {
+      const attrRows = a.attributes.length
+        ? `<table class="kv">${a.attributes.map((at) =>
+            `<tr><td>${escapeHtml(at.friendlyName ? `${at.name} (${at.friendlyName})` : at.name)}</td><td>${
+              at.values.map((v) => `<code>${escapeHtml(v)}</code>`).join('<br>')}</td></tr>`).join('')}</table>`
+        : `<div class="note">No attributes in AttributeStatement.</div>`;
+      const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null && v !== ''));
+      entries.push({
+        key: '4', label: 'Step 4',
+        title: 'Assertion — subject, conditions, attributes',
+        badge: '',
+        body: `<div class="kv-title">Issuer</div>${kvTable({ Issuer: a.issuer })}
+          <div class="kv-title">Subject</div>${kvTable(clean({
+            NameID: a.subject.nameId, Format: a.subject.nameIdFormat, Recipient: a.subject.recipient,
+            NotOnOrAfter: a.subject.notOnOrAfter, InResponseTo: a.subject.inResponseTo }))}
+          <div class="kv-title">Conditions</div>${kvTable(clean({
+            NotBefore: a.conditions.notBefore, NotOnOrAfter: a.conditions.notOnOrAfter,
+            Audience: a.conditions.audiences.join(', ') }))}
+          ${a.authn ? `<div class="kv-title">AuthnStatement</div>${kvTable(clean({
+            AuthnInstant: a.authn.authnInstant, SessionIndex: a.authn.sessionIndex,
+            AuthnContextClassRef: a.authn.contextClassRef }))}` : ''}
+          <div class="kv-title">Attributes</div>${attrRows}`,
+      });
+    }
+  }
+
+  return entries;
+}
+
+function renderSamlReport(run) {
+  const cfg = run.config;
+  const entries = buildSamlStepEntries(run);
+  const activeKey = entries[entries.length - 1]?.key;
+
+  const tabsHtml = entries.map((e) =>
+    `<button class="tab-btn${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">${escapeHtml(e.label)}</button>`
+  ).join('');
+  const panelsHtml = entries.map((e) =>
+    `<div class="tab-panel${e.key === activeKey ? ' active' : ''}" data-tab="${e.key}">
+      <div class="section-title"><h2>${escapeHtml(e.title)}</h2>${e.badge}</div>
+      ${e.body}
+    </div>`
+  ).join('');
+
+  const html = `<div class="wrap">
+    <a href="/saml" style="font-size:13px; color:var(--muted);">← New SAML test</a>
+    <h1 style="margin-top:10px;">SAML test report
+      <small>${escapeHtml(cfg.spEntityId)} · Signed request: <b>${cfg.signOn ? 'On' : 'Off'}</b> · ForceAuthn: <b>${cfg.forceAuthn ? 'On' : 'Off'}</b></small>
+    </h1>
+
+    <div class="layout">
+      <div class="layout-left">
+        <div class="card">
+          <div class="section-title"><h2>Run summary</h2></div>
+          <table class="kv">
+            <tr><td>SP Entity ID</td><td><code>${escapeHtml(cfg.spEntityId)}</code></td></tr>
+            <tr><td>IdP SSO URL</td><td><code style="word-break:break-all;">${escapeHtml(cfg.ssoUrl)}</code></td></tr>
+            <tr><td>ACS URL</td><td><code style="word-break:break-all;">${escapeHtml(cfg.acsUrl)}</code></td></tr>
+            <tr><td>Request ID</td><td><code>${escapeHtml(run.requestId)}</code></td></tr>
+            <tr><td>Status</td><td>${(STATUS_BADGE[run.status] || (() => escapeHtml(run.status)))()}</td></tr>
+          </table>
+        </div>
+        <a class="btn block secondary" href="/saml">Start a new SAML test →</a>
+      </div>
+
+      <div class="layout-resizer" title="Drag to resize · double-click to reset"></div>
+
+      <div class="layout-right">
+        <div class="card tab-group">
+          <div class="tabs" id="resultTabs">${tabsHtml}</div>
+          ${panelsHtml}
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  return page('SAML report', html, 'saml');
 }
 
 function renderRuns() {
@@ -865,25 +1098,110 @@ app.post('/discover', async (req, res) => {
 
 app.get('/saml', (req, res) => res.send(renderSamlHome()));
 
-app.post('/saml/verify', (req, res) => {
-  const { samlResponse, cert, audience, recipient } = req.body || {};
-  if (!samlResponse || !samlResponse.trim()) {
-    return res.status(400).json({ error: 'SAMLResponse is required.' });
-  }
-  if (!cert || !cert.trim()) {
-    return res.status(400).json({ error: 'An IdP signing certificate (PEM) is required to verify the signature.' });
-  }
+// Optional convenience: fetch IdP metadata (server-side, so no CORS) and
+// return the SSO URL / signing cert found in it.
+app.post('/saml/discover', async (req, res) => {
+  const { metadataUrl } = req.body || {};
+  if (!metadataUrl) return res.status(400).json({ error: 'metadataUrl is required.' });
   try {
-    const result = parseAndValidateSaml({
-      raw: samlResponse,
-      cert,
-      expectedAudience: audience?.trim() || null,
-      expectedRecipient: recipient?.trim() || null,
-    });
-    res.json(result);
+    const r = await fetch(metadataUrl);
+    const text = await r.text();
+    let parsed = null, parseError = null;
+    try { parsed = parseIdpMetadata(text); } catch (e) { parseError = e.message; }
+    res.json({ url: metadataUrl, status: r.status, statusText: r.statusText, xml: text, parsed, parseError });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    res.status(502).json({ url: metadataUrl, error: e.message });
   }
+});
+
+// Step 1: build the AuthnRequest and the redirect URL. Nothing is sent yet.
+app.post('/saml/start', (req, res) => {
+  const { ssoUrl, cert, spEntityId, acsUrl, nameIdFormat, forceAuthn, signOn, spPrivateKey } = req.body || {};
+  if (!ssoUrl || !spEntityId || !acsUrl) {
+    return res.status(400).json({ error: 'IdP SSO URL, SP Entity ID, and ACS URL are required.' });
+  }
+  if (signOn && !spPrivateKey) {
+    return res.status(400).json({ error: 'A private key is required to sign the request.' });
+  }
+
+  const relayState = crypto.randomUUID();
+  const requestId = '_' + crypto.randomBytes(16).toString('hex');
+  const xml = buildAuthnRequestXml({
+    id: requestId,
+    issueInstant: new Date().toISOString(),
+    destination: ssoUrl,
+    acsUrl, spEntityId,
+    nameIdFormat: nameIdFormat || '',
+    forceAuthn: !!forceAuthn,
+  });
+
+  let built;
+  try {
+    built = buildRedirectUrl({ ssoUrl, requestXml: xml, relayState, privateKey: signOn ? spPrivateKey : null });
+  } catch (e) {
+    return res.status(400).json({ error: 'Could not build the request: ' + e.message });
+  }
+
+  samlRuns.set(relayState, {
+    id: relayState,
+    createdAt: Date.now(),
+    config: {
+      ssoUrl, cert: cert || '', spEntityId, acsUrl,
+      nameIdFormat: nameIdFormat || '', forceAuthn: !!forceAuthn, signOn: !!signOn,
+    },
+    requestId,
+    step1: { xml, url: built.url, params: built.params, samlRequestB64: built.samlRequestB64, signed: built.signed },
+    step2: null, step3: null,
+    status: 'pending',
+  });
+
+  res.json({ id: relayState, requestId, xml, url: built.url, params: built.params, signed: built.signed });
+});
+
+// Step 2: the IdP POSTs the SAMLResponse here (HTTP-POST binding). It's
+// validated immediately, then we redirect to the report (PRG) so a browser
+// refresh never re-submits the form.
+app.post('/saml/acs', (req, res) => {
+  const { SAMLResponse, RelayState } = req.body || {};
+  const run = RelayState && samlRuns.get(String(RelayState));
+  if (!run) {
+    return res.status(400).send(renderError(
+      'Session not found',
+      'The RelayState does not match any recorded SAML test. It may have expired (30 min), the server may have restarted, or the IdP did not echo RelayState back.'
+    ));
+  }
+
+  run.step2 = { receivedAt: Date.now(), body: { ...req.body } };
+  if (!SAMLResponse) {
+    run.status = 'no_response';
+  } else {
+    try {
+      run.step3 = parseAndValidateSaml({
+        raw: String(SAMLResponse),
+        cert: run.config.cert,
+        expectedAudience: run.config.spEntityId,
+        expectedRecipient: run.config.acsUrl,
+        expectedInResponseTo: run.requestId,
+      });
+      const a = run.step3.assertion;
+      const ok = run.step3.anySignedAndValid && a && a.timeValid && a.confirmationValid &&
+        a.audienceOk !== false && a.recipientOk !== false && a.inResponseToOk !== false &&
+        run.step3.status?.code === 'urn:oasis:names:tc:SAML:2.0:status:Success';
+      run.status = ok ? 'success' : 'validation_failed';
+    } catch (e) {
+      run.step3 = { error: e.message };
+      run.status = 'parse_error';
+    }
+  }
+  res.redirect(`/saml/report/${run.id}`);
+});
+
+app.get('/saml/report/:id', (req, res) => {
+  const run = samlRuns.get(req.params.id);
+  if (!run) {
+    return res.status(404).send(renderError('Run not found', 'It may have expired or the server may have restarted.'));
+  }
+  res.send(renderSamlReport(run));
 });
 
 app.get('/callback', (req, res) => {
