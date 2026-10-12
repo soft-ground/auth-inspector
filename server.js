@@ -1290,20 +1290,32 @@ function renderSamlReport(run) {
   return page('SAML report', html, 'saml');
 }
 
+// OIDC and SAML runs live in separate maps; this merges them, newest first.
+function allRuns(limit) {
+  const oidc = [...runs.entries()].map(([id, r]) => ({
+    id, protocol: 'OIDC', createdAt: r.createdAt, label: r.config.clientId,
+    status: r.status, href: `/report/${id}`,
+  }));
+  const saml = [...samlRuns.entries()].map(([id, r]) => ({
+    id, protocol: 'SAML', createdAt: r.createdAt, label: r.config.spEntityId,
+    status: r.status, href: `/saml/report/${id}`,
+  }));
+  return [...oidc, ...saml].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+}
+
 function renderRuns() {
-  const list = [...runs.entries()]
-    .sort((a, b) => b[1].createdAt - a[1].createdAt)
-    .slice(0, 50);
+  const list = allRuns(50);
 
   const rows = list.length
-    ? list.map(([state, r]) => `
+    ? list.map((r) => `
         <tr>
           <td>${escapeHtml(new Date(r.createdAt).toLocaleString())}</td>
-          <td><code>${escapeHtml(r.config.clientId)}</code></td>
+          <td><span class="badge muted">${r.protocol}</span></td>
+          <td><code>${escapeHtml(r.label)}</code></td>
           <td>${(STATUS_BADGE[r.status] || (() => escapeHtml(r.status)))()}</td>
-          <td><a href="/report/${state}">View →</a></td>
+          <td><a href="${r.href}">View →</a></td>
         </tr>`).join('')
-    : `<tr><td colspan="4" class="note">No runs yet — start one from the home page.</td></tr>`;
+    : `<tr><td colspan="5" class="note">No runs yet — start one from the home page.</td></tr>`;
 
   return page('Recent runs', `
     <div class="wrap" style="max-width:760px;">
@@ -1311,7 +1323,7 @@ function renderRuns() {
       <h1 style="margin-top:10px;">Recent test runs</h1>
       <div class="card">
         <table class="runs">
-          <thead><tr><th>Time</th><th>Client ID</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Time</th><th>Protocol</th><th>Client ID / Entity ID</th><th>Status</th><th></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1755,11 +1767,9 @@ app.get('/saml/slo', handleSlo);
 app.post('/saml/slo', handleSlo);
 
 app.get('/api/runs', (req, res) => {
-  const list = [...runs.entries()]
-    .sort((a, b) => b[1].createdAt - a[1].createdAt)
-    .slice(0, 20)
-    .map(([state, r]) => ({ state, createdAt: r.createdAt, clientId: r.config.clientId, status: r.status }));
-  res.json(list);
+  res.json(allRuns(20).map((r) => ({
+    state: r.id, protocol: r.protocol, createdAt: r.createdAt, clientId: r.label, status: r.status,
+  })));
 });
 
 app.listen(PORT, () => {

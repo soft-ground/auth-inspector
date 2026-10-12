@@ -109,8 +109,9 @@ http://localhost:5555/callback
    Steps 1–6 filled in.
 5. Sensitive values (secret, code_verifier, code) are masked by default —
    click to reveal.
-6. Past runs are listed under "Recent test runs" on the home page (kept in
-   memory until the server restarts).
+6. Past OIDC and SAML runs are listed together under "Recent runs" (top bar),
+   newest first, with a protocol column. They are kept in memory for 30 minutes
+   or until the server restarts.
 
 ## Combinations worth trying
 
